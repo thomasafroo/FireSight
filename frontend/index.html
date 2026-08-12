@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>FireSight — Kamloops Wildfire Risk (MVP)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { color-scheme: light; }
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #panel {
+    position: absolute; top: 12px; left: 12px; z-index: 1000;
+    background: #fff; padding: 12px 16px; border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2); max-width: 300px;
+  }
+  #panel h1 { font-size: 15px; margin: 0 0 8px; }
+  #panel p.note { font-size: 12px; color: #555; margin: 4px 0 10px; }
+  #panel label { font-size: 12px; display: block; margin-bottom: 4px; }
+  #panel input, #panel button {
+    font-size: 13px; padding: 4px 6px; box-sizing: border-box; width: 100%;
+  }
+  #panel button { margin-top: 8px; cursor: pointer; }
+  #status { font-size: 12px; margin-top: 8px; color: #555; min-height: 16px; }
+  #legend {
+    position: absolute; bottom: 20px; left: 12px; z-index: 1000;
+    background: #fff; padding: 10px 12px; border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2); font-size: 12px;
+  }
+  #legend .gradient {
+    width: 160px; height: 10px; margin: 6px 0;
+    background: linear-gradient(to right, #ffffb2, #fd8d3c, #bd0026);
+    border-radius: 3px;
+  }
+  #legend .scale { display: flex; justify-content: space-between; width: 160px; }
+  #legend .actual { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+  #legend .actual .dot {
+    width: 10px; height: 10px; border-radius: 50%; background: transparent;
+    border: 2px solid #1d4ed8;
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="panel">
+  <h1>FireSight — Kamloops risk map</h1>
+  <p class="note">
+    MVP demo: replays a <em>historical</em> date already in the training
+    dataset through the trained model — not a live forecast. Pick a date
+    from within the fitted model's known range (2018–2024) and try a known
+    fire-season date like 2021-08-04.
+  </p>
+  <label for="date">Date</label>
+  <input id="date" type="date" value="2021-08-04" min="2018-01-30" max="2024-12-30" />
+  <button id="load">Load risk map</button>
+  <div id="status"></div>
+</div>
+
+<div id="legend">
+  <div>Predicted ignition risk</div>
+  <div class="gradient"></div>
+  <div class="scale"><span>low</span><span>high</span></div>
+  <div class="actual"><span class="dot"></span><span>actual fire detected that day</span></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // No build step on purpose — this is the MVP demo frontend (see
+  // docs/README.md project status); a real frontend would be a proper
+  // app, not a single static file calling a local API directly.
+  const API_BASE = window.location.hostname === "" || window.location.protocol === "file:"
+    ? "http://127.0.0.1:8000"
+    : ""; // same-origin if this page is ever served by something other than file://
+
+  const map = L.map("map").setView([50.6745, -120.3273], 8);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 12,
+  }).addTo(map);
+
+  let markers = [];
+
+  function riskColor(p) {
+    // 3-stop scale (pale yellow -> orange -> deep red), matching #legend's
+    // gradient exactly so the map and legend never drift apart.
+    const stops = [
+      [0.00, [255, 255, 178]],
+      [0.50, [253, 141, 60]],
+      [1.00, [189, 0, 38]],
+    ];
+    for (let i = 1; i < stops.length; i++) {
+      const [p0, c0] = stops[i - 1];
+      const [p1, c1] = stops[i];
+      if (p <= p1) {
+        const t = (p - p0) / (p1 - p0);
+        const c = c0.map((v, idx) => Math.round(v + t * (c1[idx] - v)));
+        return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+      }
+    }
+    return "rgb(189, 0, 38)";
+  }
+
+  async function loadRiskMap(date) {
+    const statusEl = document.getElementById("status");
+    statusEl.textContent = "Loading...";
+    markers.forEach((m) => map.removeLayer(m));
+    markers = [];
+
+    let rows;
+    try {
+      const res = await fetch(`${API_BASE}/risk-map?date=${encodeURIComponent(date)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      rows = await res.json();
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}. Is the API running (uvicorn api.main:app)?`;
+      return;
+    }
+
+    // Risk probabilities here are typically small (rare-event base rate),
+    // so scale relative to this date's own max, not a hardcoded 0-1 range,
+    // or every marker on a calm day would render as the same pale yellow.
+    const maxRisk = Math.max(...rows.map((r) => r.risk_probability), 1e-9);
+
+    for (const row of rows) {
+      if (row.latitude == null || row.longitude == null) continue;
+      const normalized = row.risk_probability / maxRisk;
+      const marker = L.circleMarker([row.latitude, row.longitude], {
+        radius: 6,
+        color: row.actual_ignited ? "#1d4ed8" : "transparent",
+        weight: row.actual_ignited ? 2 : 0,
+        fillColor: riskColor(normalized),
+        fillOpacity: 0.85,
+      }).bindTooltip(
+        `cell ${row.cell_id}<br>risk: ${(row.risk_probability * 100).toFixed(3)}%` +
+        (row.actual_ignited ? "<br><strong>fire detected here</strong>" : "")
+      );
+      marker.addTo(map);
+      markers.push(marker);
+    }
+
+    statusEl.textContent = `${rows.length} cells · ${rows.filter((r) => r.actual_ignited).length} with a real fire that day`;
+  }
+
+  document.getElementById("load").addEventListener("click", () => {
+    loadRiskMap(document.getElementById("date").value);
+  });
+
+  loadRiskMap(document.getElementById("date").value);
+</script>
+</body>
+</html>
