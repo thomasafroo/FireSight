@@ -36,3 +36,8 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.2",
 ]
+
+[tool.pytest.ini_options]
+# repo root isn't on sys.path by default under `uv run pytest` (unlike `python -m pytest`),
+# which breaks tests/test_api.py's `import api.main` for the root-level api/ package.
+pythonpath = ["."]

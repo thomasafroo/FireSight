@@ -23,22 +23,20 @@ there's no second place that list could drift out of sync.
 becomes `data/processed/model.joblib` — deliberately a separate, explicit step from `baseline.py` or
 `advanced_models.py` (which explore/compare candidates), so promoting a model to "the one being
 served" is a decision made after looking at results, not an automatic side effect of running a
-training script. Currently exports the tuned `XGBoost` model (`BEST_XGBOOST_PARAMS`, see
-[Modeling & evaluation](06-modeling-and-evaluation.md#randomforest-and-xgboost-trainingadvanced_modelspy)
-for why it was picked over RandomForest — a close call decided on PR-AUC, not a landslide).
+training script. Currently exports the tuned `RandomForest` model (`BEST_RANDOM_FOREST_PARAMS`, see
+[Modeling & evaluation](06-modeling-and-evaluation.md#widening-the-search-randomizedsearchcv--predefinedsplit)
+for the wider-search results that put it ahead of XGBoost on every test-set metric).
 
 This started out exporting the `LogisticRegression` baseline, then got swapped to XGBoost once the
-RandomForest/XGBoost tuning finished — and that swap really was a one-line change
-(`fit_logistic_regression(train)` → `fit_xgboost(train, **BEST_XGBOOST_PARAMS)` in
-`export_current_best`), with zero edits anywhere in `api/main.py`, because the API only ever depends
-on the `ModelBundle` contract, never on which model class filled it. This was verified live, not
-just assumed from the design: restarting the API after the swap, `/health` immediately reported the
-new `model_type`, and `/risk-map?date=2021-08-04`'s top-ranked cells changed from mostly false
-positives (LogisticRegression) to mostly real fire cells (XGBoost) — the same endpoint, same
-request, different answer, purely because the file on disk changed. Whatever model wins the next
-round of tuning (see the "worth revisiting" note in
-[Modeling & evaluation](06-modeling-and-evaluation.md#randomforest-and-xgboost-trainingadvanced_modelspy))
-gets served the same way.
+first RandomForest/XGBoost grid-search tuning finished, then swapped again to RandomForest once a
+wider `RandomizedSearchCV`+`PredefinedSplit` search (see [PredefinedSplit](glossary.md#predefinedsplit))
+gave RandomForest the edge on the untouched test set. Each swap really was a one-line change in
+`export_current_best` (which `fit_*` function gets called, with which params), with zero edits
+anywhere in `api/main.py`, because the API only ever depends on the `ModelBundle` contract, never on
+which model class filled it. This was verified live at every swap, not just assumed from the design:
+restarting the API, `/health` immediately reported the new `model_type`, and `/risk-map`'s top-ranked
+cells changed accordingly — the same endpoint, same request, different answer, purely because the
+file on disk changed. Whatever model wins the next round of tuning gets served the same way.
 
 ## The API (`api/main.py`)
 

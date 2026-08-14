@@ -10,7 +10,7 @@ setup, the full project layout, and current status.
 construction, label scaffold, weather join, feature engineering) -> `training` (baseline models,
 RandomForest/XGBoost tuning, persistence, export) -> `api` + `frontend` (serving). Each stage has a
 matching page in `docs/` — see the sync rule below.
-- **Currently-served model:** XGBoost, params in `training/export_model.py::BEST_XGBOOST_PARAMS`.
+- **Currently-served model:** RandomForest, params in `training/export_model.py::BEST_RANDOM_FOREST_PARAMS`.
 That file is the one deliberate, explicit place a model gets promoted to "the one the API serves" —
 don't have another script auto-export a model as a side effect. After changing which model/params it
 exports, re-run `uv run python -m firesight.training.export_model` to regenerate

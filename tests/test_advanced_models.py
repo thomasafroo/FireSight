@@ -1,10 +1,13 @@
 import numpy as np
 import pandas as pd
+from scipy.stats import randint
+from sklearn.ensemble import RandomForestClassifier
 
 from firesight.training.advanced_models import (
     fit_random_forest,
     fit_xgboost,
     tune_model,
+    tune_random_search,
 )
 from firesight.training.baseline import FEATURE_COLUMNS, LABEL_COLUMN
 
@@ -44,3 +47,18 @@ def test_tune_model_picks_the_best_scoring_candidate_and_returns_full_grid():
     matching = [r for r in results if r["n_estimators"] == best_params["n_estimators"] and r["max_depth"] == best_params["max_depth"]]
     assert matching[0]["pr_auc"] == best_score
     assert best_model is not None
+
+
+def test_tune_random_search_refits_winner_on_train_only():
+    train, val = _synthetic_frame(), _synthetic_frame(seed=1)
+    estimator = RandomForestClassifier(class_weight="balanced", random_state=0, n_jobs=1)
+    distributions = {"n_estimators": randint(10, 30), "max_depth": randint(2, 5)}
+
+    best_model, best_params, results = tune_random_search(estimator, distributions, train, val, n_iter=4)
+
+    assert len(results) == 4  # n_iter candidates sampled
+    assert set(best_params) == {"n_estimators", "max_depth"}
+    # the refit winner must actually have been fit (predict_proba works) and
+    # only on train's row count, not train+val's
+    assert best_model.predict_proba(train[FEATURE_COLUMNS])[:, 1].shape[0] == len(train)
+    assert best_model.n_estimators == best_params["n_estimators"]

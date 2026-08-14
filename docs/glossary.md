@@ -40,7 +40,9 @@ on validation data. `training/advanced_models.py::tune_model` does this manually
 the fixed 2023 temporal validation split, rather than using `sklearn.model_selection.GridSearchCV` —
 `GridSearchCV` does its own internal cross-validation (randomly splitting the training data into
 folds), which would reintroduce exactly the random-split temporal leakage `temporal_split` exists to
-avoid (see [leakage](#leakage-temporal--data-leakage)). See
+avoid (see [leakage](#leakage-temporal--data-leakage)). This only rules out `GridSearchCV`'s *default*
+cross-validation, though — see [PredefinedSplit](#predefinedsplit) for how the project later reused
+`RandomizedSearchCV` safely by handing it the same fixed split instead. See
 [Modeling & evaluation](06-modeling-and-evaluation.md#randomforest-and-xgboost-trainingadvanced_modelspy).
 
 ### Leakage (temporal / data leakage)
@@ -84,6 +86,15 @@ really was; recall = of everything truly positive, what fraction got predicted. 
 the tradeoff across all thresholds into one number, and — unlike ROC-AUC — stays sensitive to model
 quality even when negatives vastly outnumber positives, which is why it's the primary metric here.
 See [Problem framing](01-problem-framing.md#the-metrics-used-instead).
+
+### PredefinedSplit
+An `sklearn.model_selection` cross-validation splitter that takes a fixed fold assignment instead of
+computing one — you hand it a `test_fold` array (`-1` for rows that should always stay in training,
+a fold index for rows that should be held out) and it reproduces exactly that split, no shuffling.
+Used to let `RandomizedSearchCV`/`GridSearchCV` search hyperparameters against the project's existing
+train/val split without their default cross-validation reshuffling the data and reintroducing the
+same [leakage](#leakage-temporal--data-leakage) `temporal_split` exists to prevent. See
+[Modeling & evaluation](06-modeling-and-evaluation.md#widening-the-search-randomizedsearchcv--predefinedsplit).
 
 ### Reanalysis
 A dataset produced by running a physics-based weather/climate model *backward* over historical time,

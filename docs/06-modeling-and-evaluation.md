@@ -166,3 +166,51 @@ candidates all outscored its depth-16 candidates; XGBoost's depth-4 candidates a
 depth-6 candidates). Consistent with a small positive class (a few thousand positives out of
 millions of rows) — deep trees have enough capacity to start fitting noise in the majority class
 rather than generalizable fire-weather structure, so shallower trees regularize by construction.
+
+## Widening the search: RandomizedSearchCV + PredefinedSplit
+
+The grids above are deliberately small (8 candidates each) — a first tuning pass, not an exhaustive
+one. The reason `tune_model` avoids `GridSearchCV` is its *default* cross-validation, which reshuffles
+data into random folds and would reintroduce the same leakage `temporal_split` exists to prevent —
+but that only rules out the default, not the tool. [`PredefinedSplit`](glossary.md#predefinedsplit)
+lets you hand `RandomizedSearchCV`/`GridSearchCV` the *exact* existing train/val split (`test_fold`:
+`-1` for every train row, `0` for every val row) instead of letting it invent folds, so the same
+temporal-safety guarantee holds while gaining `RandomizedSearchCV`'s ability to sample a much wider,
+continuous hyperparameter space for a fixed evaluation budget (`n_iter` draws) rather than enumerating
+every combination in a hand-written grid.
+
+`training/advanced_models.py::tune_random_search` implements this: it builds the `PredefinedSplit`,
+runs `RandomizedSearchCV(..., refit=False)`, then refits the winning params on the train fold only
+(refit=False matters here — `RandomizedSearchCV`'s own refit would otherwise retrain the winner on
+train+val combined, silently changing what the "best" model was actually fit on, which would break
+the "test is never touched during tuning" guarantee every other model in this module keeps). The
+wider distributions (`RANDOM_FOREST_DISTRIBUTIONS`, `XGBOOST_DISTRIBUTIONS`) add dimensions the small
+grids never searched at all — `max_features` for RandomForest, `subsample`/`colsample_bytree`/
+`reg_alpha`/`reg_lambda` for XGBoost — sampled 15 times each:
+
+| model | params | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+|---|---|---|---|---|---|---|---|
+| `RandomForest` (grid) | 400 trees, depth 8, min_leaf 5 | 0.0081 | 0.808 | 43.9% | 0.0054 | 0.813 | 55.4% |
+| `XGBoost` (grid) | 200 trees, depth 4, lr 0.05 | 0.0083 | 0.805 | 45.1% | 0.0057 | 0.794 | 49.6% |
+| `RandomForest` (random search) | 181 trees, depth 5, max_features 0.40, min_leaf 1 | 0.0092 | **0.817** | 50.4% | **0.0058** | **0.809** | **59.7%** |
+| `XGBoost` (random search) | 131 trees, depth 3, lr 0.016, subsample 0.67, colsample 0.86 | **0.0093** | 0.811 | **52.5%** | 0.0054 | 0.803 | 59.4% |
+
+Both widened models clear their own grid-search counterparts by a wide margin on every val metric,
+and both post a large top-10% capture gain on the untouched test set (55.4%/49.6% -> 59.7%/59.4%) —
+the wider search earns its keep. The winning configs are consistently **even shallower** than the
+small grids' winners (RandomForest depth 5 vs. 8; XGBoost depth 3 with a learning rate roughly a
+third of the grid's best), reinforcing the shallower-trees-generalize-better pattern above rather than
+contradicting it.
+
+This also **changes the earlier RandomForest-vs-XGBoost read**: with both given the same wider search,
+RandomForest is now the stronger candidate on the test set specifically — better PR-AUC, better
+ROC-AUC, and a very slightly better top-10% capture — while XGBoost only edges it on the val metrics
+(the ones most exposed to overfitting a single validation fold). That's a genuine flip from the grid
+results, where XGBoost had won on PR-AUC. Not a fully exhaustive result — 15 sampled candidates is evidence of a trend, not a guarantee, and a
+larger `n_iter` would sharpen it further (an attempt at `n_iter=40` was abandoned after running ~2
+hours with no output, far past the ~20 minutes linear scaling from the 15-candidate run would predict
+— most likely `n_jobs=-1`'s process-based parallelism thrashing on repeated large-dataframe pickling
+across workers, not a real compute need). On the strength of the 15-candidate result, RandomForest
+(`BEST_RANDOM_FOREST_PARAMS`) is now the model `export_model.py` exports — see
+[Serving](07-serving.md#persisting-a-model-without-losing-its-contract) for that swap, verified live
+the same way the earlier LogisticRegression -> XGBoost swap was.

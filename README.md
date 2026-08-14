@@ -16,8 +16,9 @@ verified live, not just unit-tested:
 
 - **Data pipeline:** raw FIRMS + ERA5-Land -> grid/label/weather/feature pipeline -> processed
   dataset -> temporal train/val/test split (never random, see [Design notes](#design-notes)).
-- **Modeling:** Dummy and LogisticRegression baselines, then tuned RandomForest/XGBoost compared
-  against them. XGBoost is the model currently being served.
+- **Modeling:** Dummy and LogisticRegression baselines, then tuned RandomForest/XGBoost, widened
+  further with a `RandomizedSearchCV`+`PredefinedSplit` search. RandomForest is the model currently
+  being served.
 - **Serving:** the served model swaps with a one-line change and zero edits to `api/main.py`,
   confirmed by actually swapping it live and re-checking `/health` and `/risk-map`.
 - **Frontend:** a minimal Leaflet map replaying historical risk against real recorded outcomes.
@@ -28,7 +29,6 @@ Full reasoning and current results: `docs/README.md`.
 
 - Scaling past Kamloops to all of BC
 - Adding a neural network
-- Revisiting the close RandomForest-vs-XGBoost call
 - Wiring `/predict` to a live weather feed instead of historical replay
 - Real deployment (CORS is currently wide open, for local dev only)
 
