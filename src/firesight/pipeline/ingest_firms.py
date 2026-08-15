@@ -154,11 +154,11 @@ def save_raw(df: pd.DataFrame, out_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    out_path = Path("data/raw/firms/kamloops_2018-2024.parquet")
+    out_path = Path("data/raw/firms/kamloops_2012-2024.parquet")
     df = fetch_archive(
         BC_KAMLOOPS_BBOX,
         DEFAULT_SOURCE,
-        "2018-01-01",
+        "2012-01-01",
         "2024-12-31",
         checkpoint_path=out_path,
     )

@@ -70,7 +70,7 @@ the model trains and gets evaluated against.
 `features/labels.py::build_label_scaffold` builds this as a **cross join** (`grid_cells x dates`,
 via `pd.merge(..., how="cross")`): every cell paired with every date in the range, `ignited`
 defaulting to 0, then set to 1 wherever a filtered detection's `(cell_id, date)` matches. For the
-current Kamloops bbox at 5km resolution and 2018-2024, that's 1,443 cells × 2,557 days ≈ 3.7M rows —
+current Kamloops bbox at 5km resolution and 2012-2024, that's 1,443 cells × 4,748 days ≈ 6.9M rows —
 see [glossary.md](glossary.md#cross-join) if "cross join" is a new term.
 
 ## Filtering to real fires first

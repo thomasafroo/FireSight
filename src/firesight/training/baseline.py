@@ -47,6 +47,26 @@ DATE_COLUMN = "date"
 TRAIN_END = "2023-01-01"
 VAL_END = "2024-01-01"
 
+# Fire season: May 1 - Oct 15, matching the Kamloops Fire Centre's typical Category 2/3
+# open-burning prohibition window (docs/06). The project scopes to this window because the
+# destructive, operationally-important fires are a summer phenomenon (hot+dry conditions
+# both drive ignition and let fires spread fast) and because error analysis showed the
+# weather-only feature set has no signal for winter/shoulder-season fires anyway (they're
+# more often human-caused) — see docs/06#known-limitation-a-wintershoulder-season-blind-spot.
+FIRE_SEASON_START = "05-01"
+FIRE_SEASON_END = "10-15"
+
+
+def filter_fire_season(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep only rows within the fire season window, any year.
+
+    Compares zero-padded "MM-DD" strings rather than month/day integer
+    tuples so the range check is a single lexicographic comparison
+    instead of a two-part (month, day) comparison.
+    """
+    month_day = df[DATE_COLUMN].dt.strftime("%m-%d")
+    return df[(month_day >= FIRE_SEASON_START) & (month_day <= FIRE_SEASON_END)]
+
 
 def temporal_split(
     df: pd.DataFrame,
@@ -104,6 +124,7 @@ def _describe_split(name: str, split: pd.DataFrame) -> None:
 
 if __name__ == "__main__":
     df = pd.read_parquet(DATASET_PATH)
+    df = filter_fire_season(df)
     train, val, test = temporal_split(df, TRAIN_END, VAL_END)
     _describe_split("train", train)
     _describe_split("val", val)

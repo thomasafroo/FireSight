@@ -22,6 +22,7 @@
   }
   #panel button { margin-top: 8px; cursor: pointer; }
   #status { font-size: 12px; margin-top: 8px; color: #555; min-height: 16px; }
+  #city-status { font-size: 12px; margin-top: 6px; color: #555; min-height: 16px; }
   #legend {
     position: absolute; bottom: 20px; left: 12px; z-index: 1000;
     background: #fff; padding: 10px 12px; border-radius: 8px;
@@ -55,6 +56,12 @@
   <input id="date" type="date" value="2021-08-04" min="2018-01-30" max="2024-12-30" />
   <button id="load">Load risk map</button>
   <div id="status"></div>
+
+  <label for="city" style="margin-top: 10px;">Jump to city</label>
+  <input id="city" list="city-list" placeholder="e.g. Merritt" autocomplete="off" />
+  <datalist id="city-list"></datalist>
+  <button id="city-go">Go</button>
+  <div id="city-status"></div>
 </div>
 
 <div id="legend">
@@ -78,6 +85,52 @@
     attribution: "&copy; OpenStreetMap contributors",
     maxZoom: 12,
   }).addTo(map);
+
+  // Towns in/near the Kamloops Fire Centre bbox (-121.5,49.8,-119.0,51.5). Purely a map
+  // navigation aid — recenters the view client-side, independent of /risk-map and the
+  // trained model, so it works for places with no fire data (e.g. outside the grid/date
+  // range, or towns the FIRMS/ERA5 pipeline was never asked about).
+  const CITIES = [
+    { name: "Kamloops", lat: 50.6745, lon: -120.3273 },
+    { name: "Merritt", lat: 50.1163, lon: -120.7862 },
+    { name: "Cache Creek", lat: 50.8110, lon: -121.3306 },
+    { name: "Ashcroft", lat: 50.7211, lon: -121.2830 },
+    { name: "Logan Lake", lat: 50.4942, lon: -120.8067 },
+    { name: "Chase", lat: 50.8180, lon: -119.6820 },
+    { name: "Barriere", lat: 51.1810, lon: -120.1290 },
+    { name: "Salmon Arm", lat: 50.7001, lon: -119.2838 },
+    { name: "Vernon", lat: 50.2670, lon: -119.2720 },
+    { name: "Enderby", lat: 50.5514, lon: -119.1421 },
+    { name: "Kelowna", lat: 49.8880, lon: -119.4960 },
+    { name: "Lillooet", lat: 50.6858, lon: -121.9366 },
+    { name: "Lytton", lat: 50.2311, lon: -121.5814 },
+    { name: "Clearwater", lat: 51.6540, lon: -120.0342 },
+  ];
+
+  const cityListEl = document.getElementById("city-list");
+  for (const city of CITIES) {
+    const option = document.createElement("option");
+    option.value = city.name;
+    cityListEl.appendChild(option);
+  }
+
+  function goToCity() {
+    const input = document.getElementById("city");
+    const cityStatusEl = document.getElementById("city-status");
+    const query = input.value.trim().toLowerCase();
+    const city = CITIES.find((c) => c.name.toLowerCase() === query);
+    if (!city) {
+      cityStatusEl.textContent = query ? `No match for "${input.value}"` : "";
+      return;
+    }
+    map.setView([city.lat, city.lon], 11);
+    cityStatusEl.textContent = `Centered on ${city.name}`;
+  }
+
+  document.getElementById("city-go").addEventListener("click", goToCity);
+  document.getElementById("city").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") goToCity();
+  });
 
   let markers = [];
 

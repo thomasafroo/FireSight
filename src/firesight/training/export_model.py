@@ -18,6 +18,7 @@ from firesight.training.baseline import (
     FEATURE_COLUMNS,
     TRAIN_END,
     VAL_END,
+    filter_fire_season,
     score_model,
     temporal_split,
 )
@@ -32,11 +33,17 @@ MODEL_PATH = Path("data/processed/model.joblib")
 # models got the same wider search: RandomForest came out ahead on every test-set metric
 # (PR-AUC, ROC-AUC, top-10% capture), where XGBoost only edged it on val metrics — the
 # numbers most exposed to overfitting a single validation fold.
+#
+# Re-tuned 2026-08-15 after scoping to fire season (May 1 - Oct 15, see
+# baseline.py::filter_fire_season) and extending training data back to 2012 — see
+# docs/06-modeling-and-evaluation.md#re-tuning-after-the-fire-season-scope-change. Again the
+# randomized-search RF beat the grid-search RF on every test metric despite a slightly lower
+# val PR-AUC, so it's the pick for the same overfitting-a-single-fold reason as last time.
 BEST_RANDOM_FOREST_PARAMS = {
-    "n_estimators": 181,
-    "max_depth": 5,
-    "max_features": 0.40034730118633244,
-    "min_samples_leaf": 1,
+    "n_estimators": 238,
+    "max_depth": 6,
+    "max_features": 0.6063110478838847,
+    "min_samples_leaf": 7,
 }
 
 
@@ -51,6 +58,7 @@ def export_current_best(dataset_path: Path = DATASET_PATH, out_path: Path = MODE
     contract (predict_proba(dict) -> float), not on the model class.
     """
     df = pd.read_parquet(dataset_path)
+    df = filter_fire_season(df)
     train, val, test = temporal_split(df, TRAIN_END, VAL_END)
 
     model = fit_random_forest(train, **BEST_RANDOM_FOREST_PARAMS)

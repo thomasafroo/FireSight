@@ -25,6 +25,7 @@ from firesight.training.baseline import (
     LABEL_COLUMN,
     TRAIN_END,
     VAL_END,
+    filter_fire_season,
     score_model,
     temporal_split,
 )
@@ -93,6 +94,7 @@ def fit_random_forest(train: pd.DataFrame, **params: Any) -> RandomForestClassif
         class_weight="balanced",
         random_state=RANDOM_STATE,
         n_jobs=-1,
+        verbose=1,
         **params,
     )
     model.fit(train[FEATURE_COLUMNS], train[LABEL_COLUMN])
@@ -113,6 +115,7 @@ def fit_xgboost(train: pd.DataFrame, **params: Any) -> XGBClassifier:
         n_jobs=-1,
         scale_pos_weight=_scale_pos_weight(train),
         eval_metric="aucpr",
+        verbosity=1,
         **params,
     )
     model.fit(train[FEATURE_COLUMNS], train[LABEL_COLUMN])
@@ -141,14 +144,17 @@ def tune_model(
     scores are inspectable, not just the winner.
     """
     keys = list(param_grid)
+    candidates = list(product(*param_grid.values()))
     results = []
     best = {"score": -float("inf"), "model": None, "params": None}
 
-    for values in product(*param_grid.values()):
+    for i, values in enumerate(candidates, start=1):
         params = dict(zip(keys, values))
+        print(f"[{i}/{len(candidates)}] fitting {params}", flush=True)
         model = fit_fn(train, **params)
         scores = score_model(model, val)
         results.append({**params, **scores})
+        print(f"[{i}/{len(candidates)}] {scores}", flush=True)
 
         if scores[primary_metric] > best["score"]:
             best = {"score": scores[primary_metric], "model": model, "params": params}
@@ -196,6 +202,7 @@ def tune_random_search(
         refit=False,
         random_state=random_state,
         n_jobs=-1,
+        verbose=3,
     )
     search.fit(X, y)
 
@@ -235,6 +242,7 @@ def _run_random_search_and_report(
 
 if __name__ == "__main__":
     df = pd.read_parquet(DATASET_PATH)
+    df = filter_fire_season(df)
     train, val, test = temporal_split(df, TRAIN_END, VAL_END)
 
     _run_and_report("RandomForest", fit_random_forest, RANDOM_FOREST_GRID, train, val, test)

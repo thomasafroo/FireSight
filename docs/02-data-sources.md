@@ -64,7 +64,7 @@ fire-relevant:
 | `volumetric_soil_water_layer_1` (`swvl1`) | Topsoil moisture | Proxy for live/dead fuel moisture — drier soil correlates with drier vegetation |
 
 **Time resolution:** requested at 6-hour steps (00/06/12/18 UTC) rather than the full hourly
-product, to keep the historical backfill (84 monthly files, 2018-2024) a reasonable size. This is
+product, to keep the historical backfill (156 monthly files, 2012-2024) a reasonable size. This is
 aggregated to daily values before use — see [Weather join](04-weather-join.md) for exactly how,
 since it's not as simple as averaging all four variables the same way.
 

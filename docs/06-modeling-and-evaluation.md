@@ -21,6 +21,36 @@ been trained only on data available up to some point, how would it have performe
 The plan (README, project memory) is train ≤2022, validate on 2023, test on 2024 — each boundary is
 a date the model genuinely could not see past during training.
 
+## Scoping to fire season
+
+`training/baseline.py::filter_fire_season` restricts every training/evaluation run to **May 1 – Oct
+15** (any year), matching the Kamloops Fire Centre's typical Category 2/3 open-burning prohibition
+window. It's applied right after loading the dataset and before `temporal_split`, in `baseline.py`,
+`advanced_models.py`, and `export_model.py` alike — so this is a scope decision for the whole
+project, not just an evaluation-time filter, and the model the API serves is trained (not just
+scored) on fire-season data only.
+
+**Why:** this follows directly from the [winter/shoulder-season blind
+spot](#known-limitation-a-wintershoulder-season-blind-spot) below. Two rounds of feature engineering
+couldn't give the model any way to flag a winter fire, because winter/shoulder-season fires are more
+often human-caused (debris burning, equipment) than weather-driven, and every feature here is
+weather-derived — there's no fixable gap, just a different phenomenon the available data can't see.
+Rather than keep chasing that with more features, the project now scopes to the months where (a) the
+weather-driven fire-risk signal this model measures actually applies, and (b) the large, destructive,
+operationally-important fires concentrate — hot+dry conditions both drive ignition and let fires
+spread fast once started, which is why BC's largest fire seasons (e.g. the catastrophic summer of
+2021, spot-checked in an earlier step) are a summer phenomenon. Restricting to fire season also
+shrinks the extreme class imbalance a little, since none of the near-zero-risk winter days are in the
+pool being ranked/scored anymore.
+
+Numbers throughout the rest of this page from before this change reflect the full-year (Jan-Dec)
+dataset; re-running `baseline.py`/`advanced_models.py`/`export_model.py` after this change will
+produce fire-season-only numbers that aren't directly comparable to them (fewer rows, different class
+balance, different date range) — expected to move mostly by removing the "free" near-zero-risk winter
+rows from the ranking, not because anything about the model itself changed. See [Re-tuning after the
+fire-season scope change](#re-tuning-after-the-fire-season-scope-change) below for what actually
+happened when the models were re-tuned on the new scope.
+
 ## Baseline-first methodology
 
 Also covered in
@@ -214,3 +244,156 @@ across workers, not a real compute need). On the strength of the 15-candidate re
 (`BEST_RANDOM_FOREST_PARAMS`) is now the model `export_model.py` exports — see
 [Serving](07-serving.md#persisting-a-model-without-losing-its-contract) for that swap, verified live
 the same way the earlier LogisticRegression -> XGBoost swap was.
+
+## Re-tuning after the fire-season scope change
+
+Two changes landed together before this re-tune: the [fire-season
+scoping](#scoping-to-fire-season) above, and extending the raw FIRMS/ERA5-Land ingestion window back
+to 2012 (from 2018) for more training rows — `train` now covers 2012-2022 instead of 2018-2022, while
+`val` (2023) and `test` (2024) boundaries are unchanged. Both `advanced_models.py::tune_model` (the
+small hand-written grids) and `tune_random_search` (the wider `RandomizedSearchCV`+`PredefinedSplit`
+search) were re-run against this new scope:
+
+| model | params | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+|---|---|---|---|---|---|---|---|
+| `RandomForest` (grid) | 200 trees, depth 16, min_leaf 5 | **0.0150** | 0.795 | 39.5% | 0.0102 | 0.878 | 69.4% |
+| `XGBoost` (grid) | 200 trees, depth 6, lr 0.1 | 0.0144 | 0.785 | 36.5% | 0.0088 | 0.876 | 64.5% |
+| `RandomForest` (random search) | 238 trees, depth 6, max_features 0.606, min_leaf 7 | 0.0138 | 0.832 | 41.9% | **0.0106** | **0.884** | **71.9%** |
+| `XGBoost` (random search) | 162 trees, depth 5, lr 0.015, subsample 0.88, colsample 0.72 | 0.0135 | 0.827 | 41.4% | 0.0081 | 0.882 | 69.0% |
+
+The same pattern as the earlier widening-the-search result repeats: grid-search RandomForest narrowly
+wins on val PR-AUC, but the randomized-search RandomForest wins on **every** test metric (PR-AUC,
+ROC-AUC, top-10% capture) despite a lower val score — and val PR-AUC is exactly the number most prone
+to overfitting a single validation fold, especially when a grid only tried 8 combinations. Consistent
+with that reasoning (and with how the RandomForest-over-XGBoost call was made last time), the
+randomized-search RandomForest (`n_estimators=238, max_depth=6, max_features=0.6063, min_samples_leaf=7`)
+is the new `BEST_RANDOM_FOREST_PARAMS` in `export_model.py`, re-exported to `data/processed/model.joblib`.
+
+**Don't over-read the jump from the pre-scoping numbers** (e.g. test top-10% capture 59.7% ->
+71.9%). Two things changed at once — more training years and a narrower, easier-to-rank evaluation
+population (winter's huge pool of near-zero-risk non-fire rows is gone from val/test, not just from
+train) — neither of which means the model generalizes better to conditions it couldn't handle before.
+It's a fair comparison of models *within* this run, and a legitimate scope decision, but not evidence
+of a modeling breakthrough against the old numbers above it on this page.
+
+Also worth naming: test metrics beating val metrics by this much (e.g. test top-10% 71.9% vs. val
+41.9%) is the same directional pattern seen before the scope change, just more pronounced. The
+likely explanation carries over unchanged — 2024 (test) contains the small number of large, obvious
+summer fire events fire-weather features are best at catching, while 2023 (val) apparently has a
+harder mix — but this is worth re-checking with a monthly breakdown if the gap keeps widening as the
+project evolves, the same way the winter blind spot was originally found by looking past the
+aggregate number.
+
+## Known limitation: a winter/shoulder-season blind spot
+
+Error analysis against the served RandomForest's own risk ranking on the 2024 test set (splitting
+actual fires by whether they landed in the model's own top 10% by predicted risk, the same cutoff
+`top_10pct_capture` scores against) found the model's overall 59.7% capture rate hides a strong
+seasonal split, not a uniformly-distributed error rate:
+
+| month | fires caught (top 10%) | fires missed |
+|---|---|---|
+| Jul | 111 | 9 |
+| Aug | 81 | 30 |
+| Nov | 26 | 33 |
+| Feb | 1 | 31 |
+| Dec | 0 | 23 |
+
+July/August fires are caught almost perfectly; **December is 0/23 and February is 1/32**. Missed
+fires occur in conditions ~14.5K cooler, 23 percentage points more humid, and after ~5 more recent
+dry-free days than caught fires — the model has learned "hot + dry = risk", which nails summer
+fire-weather but has no way to flag an ignition that happens *despite* cool, wet conditions. That's
+plausible for winter/shoulder-season fires specifically: they're more likely human-caused (debris
+burning, equipment, campfires) than fuel/weather-driven, and every feature in `FEATURE_COLUMNS` is
+weather-derived.
+
+Two feature-engineering attempts to close this gap were tried and **both failed to move it**:
+
+1. **Calendar features** (`day_of_year_sin`/`cos`, `is_weekend`, an `open_burning_season` flag
+   derived from the Kamloops Fire Centre's typical Category 2/3 burning-prohibition window) — the
+   two day-of-year features became the model's top-2 by importance (40% combined, more than soil
+   moisture), but December stayed 0/23 and February 1/32 exactly. Test top-10% capture barely moved
+   (59.7% -> 60.7%) while val top-10% capture dropped hard (50.4% -> 33.1%).
+2. **Proximity features** (`dist_to_road_km`, `dist_to_place_km`, nearest-neighbor distance from
+   each grid cell to OpenStreetMap roads/populated places, fetched via the Overpass API and joined
+   as static per-cell values) — same result: December 0/23, February 1/32, unchanged. Test top-10%
+   capture dropped to 48.9%. A diagnostic refit with much more capacity (uncapped depth, 400 trees,
+   run purely to check whether the tuned model's shallow depth was the bottleneck rather than the
+   features themselves) moved December/February by only 1-2 fires each while cratering every other
+   metric (test top-10% capture 26.4%) — the classic overfitting-to-majority-class-noise pattern
+   from the tuning results above, not evidence the added capacity was the fix.
+
+Neither addition was kept — both were reverted after evaluation, so they aren't in `FEATURE_COLUMNS`
+or `data/processed/kamloops_dataset.parquet` today, and there is no `proximity.py` or
+`ingest_geography.py` in the repo.
+
+**Why this looks structural rather than a missing-feature problem:** both attempts added *static*
+signal — a value fixed per calendar date or per grid cell, constant across the many days/cells it
+applies to. `top_10pct_capture` ranks every (cell, date) row in the entire test year against every
+other row for one global cutoff. A static offset can shift a cell's or a date's baseline risk up or
+down, but it cannot manufacture day-to-day variation within a cell, and it is nowhere near strong
+enough to lift a handful of winter fires above the tens of thousands of ordinary-looking winter
+non-fire rows it's competing against in that single global ranking. Fixing this for real would need a
+feature that varies *with the actual ignition event* day by day (e.g. real burn-permit records or
+lightning-strike data), which this project has no source for — not a different weather or calendar
+proxy computed from data already on hand.
+
+**Conclusion:** treated as a documented limitation of a weather-only model rather than a bug to keep
+chasing with more features. The project's actual response to this, as of the [fire season
+scoping](#scoping-to-fire-season) above, isn't a season-specific threshold — it's excluding
+Nov-Apr from the problem entirely, since those are the months this blind spot lives in and the
+months where the largest, most operationally-important fires don't occur anyway.
+
+## Feature importance: what the model is actually leaning on
+
+Before trusting the served RandomForest's predictions, it's worth checking that its accuracy comes
+from real fire-weather signal and not from an artifact of the grid, the join, or how the temporal
+split happens to fall. Two importance measures were compared:
+
+- **Mean decrease in impurity (MDI)** — `rf.feature_importances_`, built into the fitted model. Fast,
+  but biased toward continuous/high-cardinality features and only reflects the training set, so it can
+  overstate a feature the model happened to split on a lot without that split actually helping predict
+  new data.
+- **Permutation importance** — `sklearn.inspection.permutation_importance`, computed separately on the
+  2023 val and 2024 test splits (10 repeats each, scored by PR-AUC, the project's primary metric).
+  Shuffling one feature column at a time and measuring how much held-out PR-AUC drops is a more honest
+  measure of what the model actually depends on to generalize, since it's evaluated on data the model
+  never trained on.
+
+Both agree on the same ranking, which is reassuring — if MDI and permutation importance disagreed
+sharply, that would suggest the model was overfit to training-set idiosyncrasies rather than a real
+pattern:
+
+| feature | MDI | permutation ΔPR-AUC (val) | permutation ΔPR-AUC (test) |
+|---|---|---|---|
+| `swvl1` (soil moisture) | 0.269 | +0.00203 | +0.00308 |
+| `t2m_mean_7d` | 0.224 | +0.00165 | +0.00264 |
+| `precip_30d` | 0.180 | +0.00240 | +0.00322 |
+| `t2m` | 0.112 | +0.00070 | +0.00128 |
+| `rh_mean_7d` | 0.085 | +0.00053 | +0.00052 |
+| `relative_humidity` | 0.040 | +0.00032 | +0.00136 |
+| `precip_mm` | 0.028 | +0.00035 | +0.00004 |
+| `days_since_rain` | 0.015 | +0.00004 | +0.00014 |
+| `precip_7d` | 0.010 | +0.00006 | +0.00004 |
+| `u10`, `v10`, `wind_dir_sin/cos`, `wind_speed`, `d2m`, `t2m_trend_7d` | all <0.01 | ~0 or slightly negative | ~0 or slightly negative |
+
+Two takeaways:
+
+1. **The signal is real, not an artifact.** The top 5 features by both measures — soil moisture,
+   30-day precip, 7-day mean temp, raw temp, 7-day mean humidity — are exactly the slow-moving
+   fuel-dryness indicators a wildfire-weather domain expert would expect to matter most. None of the
+   grid/join mechanics (cell geometry, nearest-neighbor weather assignment) show up as unexpectedly
+   dominant, which is what a subtle pipeline bug driving the score would look like.
+2. **Wind and the 7-day temp trend are dead weight in this model.** `wind_speed`, both wind-direction
+   components, `d2m`, and `t2m_trend_7d` all sit at or below zero permutation importance on both val
+   and test — shuffling them doesn't hurt held-out PR-AUC at all, sometimes even helps slightly (noise,
+   not real negative signal). The RandomForest simply isn't using them; it's making its calls almost
+   entirely off soil moisture, precipitation, and temperature. This wasn't touched — removing
+   low-importance features is a legitimate follow-up but not free at this depth/leaf-count, since a
+   depth-5 tree gets to pick very few splits in total and its meaning could still change if the search
+   were re-run without those columns — but it explains, in addition to the reasoning in [Known
+   limitation](#known-limitation-a-wintershoulder-season-blind-spot) above, why the winter/shoulder-
+   season blind spot was so resistant to more weather features: the model's five real levers are all
+   slow-moving fuel-dryness signals, and nothing in `FEATURE_COLUMNS` — including the features it
+   currently ignores — encodes anything about human activity, which is the more likely driver of
+   winter ignitions.

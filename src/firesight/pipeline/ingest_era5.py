@@ -111,7 +111,7 @@ def fetch_archive(
 
 
 if __name__ == "__main__":
-    failed_months = fetch_archive(2018, 2024, Path("data/raw/era5"))
+    failed_months = fetch_archive(2012, 2024, Path("data/raw/era5"))
     if failed_months:
         print(f"Done with {len(failed_months)} failures: {failed_months}", flush=True)
     else:

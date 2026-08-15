@@ -18,11 +18,11 @@ from firesight.features.labels import build_label_scaffold, filter_real_fires
 from firesight.features.weather import join_weather, load_era5_daily
 from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
 
-FIRMS_PATH = Path("data/raw/firms/kamloops_2018-2024.parquet")
+FIRMS_PATH = Path("data/raw/firms/kamloops_2012-2024.parquet")
 ERA5_DIR = Path("data/raw/era5")
 OUT_PATH = Path("data/processed/kamloops_dataset.parquet")
 
-START_DATE = "2018-01-01"
+START_DATE = "2012-01-01"
 END_DATE = "2024-12-31"
 CELL_SIZE_KM = 5.0
 

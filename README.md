@@ -25,6 +25,15 @@ verified live, not just unit-tested:
 
 Full reasoning and current results: `docs/README.md`.
 
+**Scoped to fire season:** training and evaluation are restricted to May 1 - Oct 15 (any year),
+matching the Kamloops Fire Centre's typical open-burning prohibition window. This follows from a
+winter/shoulder-season blind spot found during error analysis — the served model missed nearly all
+winter fires (0/23 in December on the 2024 test set) because they're more often human-caused than
+weather-driven, and every feature here is weather-derived. Two feature-engineering attempts to fix it
+failed, so rather than keep chasing it, the project now excludes those months from the problem
+entirely and focuses on the summer fire-weather signal the model actually has. See [Modeling &
+evaluation](docs/06-modeling-and-evaluation.md#scoping-to-fire-season).
+
 **Open, not-yet-decided next steps:**
 
 - Scaling past Kamloops to all of BC
