@@ -83,10 +83,9 @@ thing to try before resorting to under/oversampling.
 
 ```python
 FEATURE_COLUMNS = [
-    "t2m", "d2m", "u10", "v10", "swvl1", "precip_mm",         # raw weather
-    "relative_humidity", "wind_speed", "wind_dir_sin", "wind_dir_cos",
-    "days_since_rain", "precip_7d", "precip_30d",              # engineered
-    "t2m_mean_7d", "t2m_trend_7d", "rh_mean_7d",
+    "t2m", "swvl1", "precip_mm", "relative_humidity", "wind_speed",  # raw weather
+    "days_since_rain", "precip_7d", "precip_30d",                     # engineered
+    "t2m_mean_7d", "rh_mean_7d",
 ]
 
 model = Pipeline([
@@ -100,26 +99,27 @@ A plain `Pipeline`, not a `ColumnTransformer`, in the end — see below for why.
 being explicit about:
 
 - **No `ColumnTransformer` needed at all, in the end.** Every feature that made it into
-`FEATURE_COLUMNS` is numeric (temperature, wind speed, days-since-rain, sin/cos wind direction,
-etc.) — there's no categorical column to route separately, so a single `StandardScaler` applied to
-everything is enough; `ColumnTransformer` only earns its keep once different columns need different
-treatment. `cell_id` is deliberately *not* fed in as a raw feature — treating it as a categorical
-column (even one-hot encoded) would let the model partly memorize "this specific cell tends to
-burn," which can't generalize to a cell it hasn't seen enough fire history for, and muddies the
-temporal-generalization story the whole train/val/test split is designed to test honestly.
+`FEATURE_COLUMNS` is numeric (temperature, soil moisture, precipitation, wind speed,
+days-since-rain, etc.) — there's no categorical column to route separately, so a single
+`StandardScaler` applied to everything is enough; `ColumnTransformer` only earns its keep once
+different columns need different treatment. `cell_id` is deliberately *not* fed in as a raw feature
+— treating it as a categorical column (even one-hot encoded) would let the model partly memorize
+"this specific cell tends to burn," which can't generalize to a cell it hasn't seen enough fire
+history for, and muddies the temporal-generalization story the whole train/val/test split is
+designed to test honestly.
 - **Scaling only matters for the linear model.** `StandardScaler` is needed for `LogisticRegression`
 (gradient-based optimization converges better and regularization behaves sanely when features are on
 comparable scales) but is a no-op for tree-based models (`RandomForestClassifier`, `XGBoost`) —
 trees split on thresholds per feature independently, so the scale of a feature doesn't change what
 splits are chosen. The pipeline can stay a no-scaling passthrough for tree models, or keep the
 scaler in place harmlessly.
-- **Fit only on train.** Whatever preprocessing goes in the `ColumnTransformer` — scaling, and
-eventually imputation for the rolling-feature warm-up NaNs (see
-[Feature engineering](05-feature-engineering.md#planned-handling-of-the-nans-this-introduces)) —
-gets `.fit()` on the train split only, then `.transform()` on val and test. Fitting on the full
-dataset (including val/test) before splitting would leak information about their distribution into
-preprocessing decisions, a subtler version of the same leakage problem the temporal split exists to
-prevent.
+- **Fit only on train.** `StandardScaler` is `.fit()` on the train split only, then `.transform()`
+on val and test — fitting it on the full dataset (including val/test) before splitting would leak
+information about their distribution into a preprocessing decision, a subtler version of the same
+leakage problem the temporal split exists to prevent. (The rolling-feature warm-up `NaN`s are a
+separate, earlier step: rows are dropped outright — not imputed — in `pipeline/build_dataset.py`
+before the split even happens, since a dropped row has no split-dependent behavior to leak; see
+[Feature engineering](05-feature-engineering.md#handling-the-nans-this-introduces).)
 
 ## Metrics
 

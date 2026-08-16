@@ -7,7 +7,10 @@ used.
 A way of representing an angle (compass direction, hour of day, day of year) as two numeric columns,
 `sin(θ)` and `cos(θ)`, instead of one raw number. A raw angle column falsely treats 359° and 1° as
 far apart (358 units) when they're actually 2° apart; sin/cos preserves true circular distance. See
-[Feature engineering](05-feature-engineering.md#planned-features).
+[Feature engineering](05-feature-engineering.md#what-actually-got-built) (`wind_dir_sin`/
+`wind_dir_cos` are still computed there, though they were dropped from the served model's
+`FEATURE_COLUMNS` — see
+[Modeling & evaluation](06-modeling-and-evaluation.md#dropping-the-dead-weight-features)).
 
 ### Class imbalance
 When one class (here, `ignited == 1`) makes up a small fraction of the data — 0.16% in this dataset.

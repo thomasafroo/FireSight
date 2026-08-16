@@ -1,6 +1,7 @@
 # Weather join
 
-`features/weather.py` takes 84 monthly ERA5-Land NetCDF files and turns them into daily weather
+`features/weather.py` takes 156 monthly ERA5-Land NetCDF files (2012-2024, see [Data
+sources](02-data-sources.md)) and turns them into daily weather
 values attached to every row of the label scaffold from [Grid & labels](03-grid-and-labels.md). Two
 separate problems get solved here, and conflating them is an easy way to get silently wrong data:
 **(1)** the fire grid and the weather grid don't line up, and **(2)** "aggregate sub-daily readings

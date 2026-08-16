@@ -103,7 +103,7 @@ uv run uvicorn api.main:app --reload                      # serves it on :8000
 ## Design notes
 
 - **No random train/test split.** Wildfire observations are spatially and temporally correlated, so
-splitting randomly leaks information. Split by date instead (e.g. train on 2015–2022, validate 2023,
+splitting randomly leaks information. Split by date instead (train on 2012-2022, validate 2023,
 test 2024) to simulate "would this have worked in real time."
 - **Accuracy is not the metric.** Fires are rare, so a model predicting "no fire" everywhere would
 score ~99% while being useless. Use PR-AUC, recall, and top-k% capture rate instead (see
