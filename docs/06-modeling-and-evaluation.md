@@ -319,6 +319,179 @@ limitation as the winter blind spot, not a bug — no code change made here, sin
 by real between-year variation in *when* fires happened, not by a leak, split-boundary bug, or
 scoring inconsistency between val and test.
 
+## Rolling-origin backtest: is 71.9% typical, or the best year in the dataset?
+
+The investigation above explains the *val-vs-test* gap, but it only compares two years. The deeper
+question it raises — "how much does the reported number move if you happen to test on a different
+year?" — needs more than two data points to answer honestly. `evaluation/backtest.py` answers it: keep
+`BEST_RANDOM_FOREST_PARAMS` fixed (no re-tuning per fold, to isolate "does the *evaluation year* matter"
+from "would retuning help"), refit on an **expanding** training window (2012 through year N-1), and
+score against each subsequent year N in turn, for N = 2017..2024 (2012-2016 reserved as a five-year
+floor before the first holdout, so the earliest fold isn't evaluating off a single year of history).
+
+| year | train rows | holdout positives | PR-AUC | ROC-AUC | top-10% capture |
+|---|---|---|---|---|---|
+| 2017 | 1,212,120 | 1,433 | 0.0141 | 0.763 | 30.8% |
+| 2018 | 1,454,544 | 229 | 0.0023 | 0.762 | 25.3% |
+| 2019 | 1,696,968 | 57 | 0.0004 | 0.623 | 22.8% |
+| 2020 | 1,939,392 | 43 | 0.0003 | 0.653 | 16.3% |
+| 2021 | 2,181,816 | 2,628 | 0.0333 | 0.829 | 27.0% |
+| 2022 | 2,424,240 | 98 | 0.0005 | 0.632 | **8.2%** |
+| 2023 | 2,666,664 | 802 | 0.0136 | 0.833 | 41.8% |
+| 2024 | 2,909,088 | 242 | 0.0113 | 0.884 | **74.4%** |
+
+**Sanity check first:** the 2023 row (train on everything before 2023) reproduces the original `val`
+numbers from [Re-tuning after the fire-season scope
+change](#re-tuning-after-the-fire-season-scope-change) *exactly* (PR-AUC 0.0136, ROC-AUC 0.833,
+top-10% 41.8%) — expected, since it's the same train set and the same holdout year, just computed by
+this script instead of `export_model.py`. The 2024 row is close to but not identical to the originally
+reported `test` numbers (71.9% there vs. 74.4% here) for a real reason, not noise: `export_model.py`'s
+served model trains only through 2022 (`TRAIN_END = "2023-01-01"`) and is scored against *both* val
+2023 and test 2024 without ever training on 2023's data, while this fold's training window includes
+2023 (one extra year) before scoring 2024 — a small, expected boost from more training data, not a
+discrepancy to chase.
+
+**The headline number turns out to be close to the best year observed, not a typical one.** Across all
+8 folds: top-10% capture has mean **30.8%**, median **26.2%**, and a standard deviation of **~19
+percentage points** — on a metric that's bounded at 0% and 100%, that's enormous relative spread. The
+71.9%/74.4% number this project has been citing as "the" result sits at the *top* of this range, tied
+with 2023 as the two best years out of eight; five of the eight backtested years land at 30% or below,
+and 2022 — trained on *more* data than 2017 or 2021 — is the worst of all at 8.2%.
+
+**What doesn't explain the swing:** more training data. Training rows grow monotonically from 1.2M
+(2017) to 2.9M (2024), but top-10% capture doesn't track that at all (2022, with double 2017's
+training data, scores a quarter of 2017's number). Nor does raw fire count in the holdout year: 2017
+and 2021 (BC's two worst fire seasons on record, 1,433 and 2,628 positives) score *worse* than 2023's
+802-positive year and far worse than 2024's comparatively quiet 242-positive year. **What's more
+consistent with the evidence:** the same structural weakness documented in [Investigating the val/test
+gap](#investigating-the-valtest-gap-a-monthly-breakdown) and [Known
+limitation](#known-limitation-a-wintershoulder-season-blind-spot) above — the model is much stronger in
+peak July/August than at the fire-season's shoulders — so a year's score depends heavily on *when
+within the season* its fires happened to land, which swamps both "how many fires" and "how much
+training data" as an explanation. See [Why performance swings by month and
+year](#why-performance-swings-by-month-and-year) below for the month-by-month breakdown that actually
+tests this hypothesis, rather than just ruling out the two simpler explanations.
+
+**One reassuring, consistent result across every fold:** ROC-AUC never dropped below 0.62 in any of
+the 8 years (mean 0.747), meaning the model beat random ranking (0.5) in every single year tested,
+including the worst ones. The instability is in *how much* better than chance the model is in a given
+year, not *whether* it's better than chance at all — the model has real, year-round signal, it's just
+unevenly distributed across the fire-season calendar.
+
+**Practical takeaway:** don't repeat "71.9% top-10% capture" as if it were the model's expected
+real-world performance — cite the full range (8-74%, median ~26%) or, if a single number is needed,
+the median rather than the best-observed year. This doesn't undo the earlier finding that the model
+beats chance by a wide, real margin (see [Baseline
+results](#baseline-results-2023-validation-set)) — it means the size of that margin is much less
+certain, and much more year-dependent, than a single test-set number could show.
+
+## Why performance swings by month and year
+
+The [backtest above](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset)'s leading
+hypothesis — that a year's score depends on *when in the season* its fires land — was only tested
+informally on two years so far ([Investigating the val/test
+gap](#investigating-the-valtest-gap-a-monthly-breakdown)). `evaluation/backtest.py::
+monthly_capture_breakdown` generalizes that by-hand table to every one of the 8 rolling-origin folds,
+using the exact same top-10%-by-risk cutoff `top_10pct_capture` scores against, broken down by month.
+
+**Pooled across all 8 years, the month-level pattern is unambiguous and consistent:**
+
+| month | fires (8 years pooled) | caught | capture rate |
+|---|---|---|---|
+| May | 53 | 2 | **3.8%** |
+| Jun | 45 | 19 | 42.2% |
+| Jul | 2,289 | 903 | 39.4% |
+| Aug | 2,522 | 712 | 28.2% |
+| Sep | 409 | 90 | 22.0% |
+| Oct | 214 | 27 | **12.6%** |
+
+May is by far the weakest month in the entire fire-season window — worse, in relative terms, than the
+already-documented September weakness — despite being included as "in season." October is the second
+weakest. June and July are the strongest, and August, despite being colloquially "peak fire season," is
+meaningfully weaker than July (28.2% vs. 39.4%) once pooled across 8 years rather than read off a single
+year. This is the clearest confirmation yet that the model's skill genuinely is concentrated in the
+core of the season and thins out at both edges — not just a two-year coincidence.
+
+**But month mix only partly explains the year-to-year swing, and the residual is informative.** Ranking
+each year by the *share* of its fires that landed in Jul/Aug (the two strongest months) against its
+overall `top_10pct_capture` gives a correlation of **r = 0.63** across the 8 folds — real and positive,
+but far from a complete explanation:
+
+| year | % of that year's fires in Jul/Aug | top-10% capture |
+|---|---|---|
+| 2019 | 3.5% | 22.8% |
+| 2020 | 32.6% | 16.3% |
+| 2022 | 34.7% | 8.2% |
+| 2018 | 39.3% | 25.3% |
+| 2023 | 79.7% | 41.8% |
+| 2017 | 87.4% | **30.8%** |
+| 2021 | 97.0% | **27.0%** |
+| 2024 | 95.5% | 74.4% |
+
+**2017 and 2021 are the outliers that keep this from being a clean story.** Both had 87-97% of their
+fires in the nominally-strongest months, yet both scored only 27-31% — worse than 2023's 79.7%-in-
+Jul/Aug year, and far worse than 2024's similarly Jul/Aug-heavy year (95.5% -> 74.4%). Both 2017 and
+2021 are BC's two worst fire seasons on record, and both show the same specific pattern when broken
+down further: 2021's August alone (1,009 fires — roughly 2-4x a typical year's *entire* season) was
+caught only **11.7%** of the time (118/1,009), even though August is a nominally strong month in every
+other year. That's consistent with a second, independent factor beyond month-of-season: **extreme,
+high-volume fire seasons seem to break the ranking even within their strong months**, plausibly because
+`top_10pct_capture` ranks a fixed ~24,000-row slice against the *entire* year at once — a season with
+several times the normal fire count has that much more competition for the same fixed number of "top
+10%" slots, and/or extreme seasons plausibly involve a higher share of fires whose spread is driven by
+wind/fuel-continuity effects this weather-only feature set doesn't capture, not just heat and dryness.
+
+**Follow-up investigation, confirmed both mechanisms above are real.** Refitting just the 2017 and 2021
+folds (plus 2024 as a normal-year control) and comparing caught vs. missed fires directly on two axes —
+how many *other* cells ignited that same day, and how the raw weather features differ — found two
+separate, compounding effects, not one:
+
+**1. Extreme same-day fire counts directly overwhelm the fixed top-10% budget, but only past a
+threshold.** Bucketing each year's fires by how many cells ignited on that exact date:
+
+| year | 1 fire/day | 2-5 | 6-20 | 21-50 | 51-100 | 100+ |
+|---|---|---|---|---|---|---|
+| 2024 (control) | 0% | 38.1% | 83.6% | 80.0% | — | — |
+| 2017 | 7.7% | 20.6% | 33.6% | 31.4% | 23.1% | — |
+| 2021 | 0.0% | 15.2% | 24.2% | **41.5%** | 28.2% | **15.1%** |
+
+In the normal-year control (2024, max 30 same-day fires), capture *rises* with same-day fire count —
+more simultaneous ignitions means a hotter/drier/windier day, exactly the pattern the model is tuned to
+flag, so it catches most of a busy day at once. **2021 shows the opposite past a point**: capture peaks
+at 41.5% for 21-50-fire days, then *falls* to 28.2% and then 15.1% as same-day counts climb past 50 and
+past 100 — 2021 had entire days with 100+ simultaneous ignitions (581 fires fall in that single bucket
+alone), something no other backtested year came close to. `top_10pct_capture` ranks a fixed ~24,000-row
+slice against the *whole year* (~144 rows/day if spread evenly across the 168-day season) — a single
+day with 100+ real fires mechanically cannot all fit in that day's share of the budget even if the
+model correctly flags the whole day as extreme risk, especially when neighboring extreme days are
+competing for the same fixed slots. 2017 shows the same declining-past-the-peak shape at a smaller
+scale (31.4% -> 23.1% from the 21-50 to 51-100 bucket) without ever reaching 2021's 100+ regime.
+
+**2. The weather-based signal itself is less discriminative in extreme years.** Comparing mean feature
+values between caught and missed fires:
+
+| | 2024 (control): caught vs. missed | 2021: caught vs. missed |
+|---|---|---|
+| `t2m` | 295.2K vs. 289.9K (**5.3K gap**) | 294.6K vs. 293.1K (**1.5K gap**) |
+| `relative_humidity` | 38.6% vs. 54.1% (**15.5pp gap**) | 34.6% vs. 43.3% (**8.7pp gap**) |
+| `swvl1` | 0.171 vs. 0.263 | 0.165 vs. 0.181 |
+
+The same "hot+dry gets caught, cool+wet gets missed" direction holds in every year, but the *gap*
+between caught and missed is roughly a third the size in 2021 as in the 2024 control. That's consistent
+with 2021's defining feature as a fire season: the June 2021 BC heat dome put much of the province
+under extreme heat/drought *simultaneously*, which compresses exactly the kind of cell-to-cell weather
+variation the model relies on to rank — when nearly every cell looks dangerously hot and dry at once,
+there's less relative signal left to separate which specific ones actually ignite that day, on top of
+the fixed-budget problem in (1).
+
+**Together:** month-of-season explains most of the routine year-to-year swing (r=0.63 above), and these
+two compounding effects — a fixed annual ranking budget breaking down on the most extreme same-day fire
+counts, plus weather variation itself compressing during province-wide extreme events — explain why the
+two most severe fire seasons specifically underperform relative to their Jul/Aug-heavy month mix. Both
+are structural properties of a global, weather-only ranking approach on binary-outcome data, not bugs
+to fix with more features — the same conclusion the winter/shoulder-season blind spot investigation
+below reaches for a different structural gap.
+
 ## Known limitation: a winter/shoulder-season blind spot
 
 Error analysis against the served RandomForest's own risk ranking on the 2024 test set (splitting
@@ -484,3 +657,120 @@ is the more likely driver of winter ignitions. It also directly simplified [live
 fetching](07-serving.md#live-weather-for-predictlive) for `/predict/live`: Open-Meteo can supply
 relative humidity and wind speed *directly*, so the live-weather path never needs to reconstruct them
 from dewpoint or wind vector components the way the ERA5-Land ingestion pipeline does.
+
+## Calibration: is `ignition_probability` a real probability?
+
+Every metric on this page so far — PR-AUC, ROC-AUC, `top_10pct_capture` — is **rank-only**: each one
+asks "are actual fires scored higher than non-fires," and every one of them is mathematically
+unchanged by any monotonic rescaling of the raw scores. A model can top all three while its raw
+`predict_proba` output is wildly wrong in absolute terms, which matters a lot here specifically,
+because `api/main.py`'s `/predict` and `/predict/live` both hand a caller `ignition_probability` as a
+bare float with no caveat — an obvious reading is "this cell has a 70% chance of igniting today" when
+it says 0.7. `evaluation/calibration.py` checks whether that reading is actually justified, via two
+tools that measure the thing rank metrics can't: **Brier score** (mean squared error between predicted
+probability and the {0,1} outcome — 0 is perfect, and a model that just always predicts the true base
+rate scores `base_rate * (1 - base_rate)`, a cheap floor to compare against) and a **reliability
+table** (bucket predictions by predicted-probability quantile, then compare each bucket's mean
+predicted probability against its actual observed fire rate — they should track each other for a
+calibrated model).
+
+Run against the served model on both held-out splits:
+
+| | brier score | base-rate-only floor | observed positive rate |
+|---|---|---|---|
+| val (2023) | 0.1233 | 0.0033 | 0.33% |
+| test (2024) | 0.0993 | 0.0010 | 0.10% |
+
+**The served model's Brier score is ~40-100x *worse* (higher) than a trivial model that ignores every
+feature and always predicts the split's true base rate.** That's a real, specific finding, not a
+rounding effect — the reliability table shows exactly why:
+
+| val (2023) predicted-probability bin | mean predicted | observed rate |
+|---|---|---|
+| 0.034 - 0.046 | 0.044 | 0.004% |
+| 0.046 - 0.057 | 0.051 | 0.008% |
+| 0.057 - 0.078 | 0.067 | 0.037% |
+| 0.078 - 0.098 | 0.089 | 0.037% |
+| 0.098 - 0.127 | 0.111 | 0.050% |
+| 0.127 - 0.175 | 0.150 | 0.144% |
+| 0.175 - 0.264 | 0.215 | 0.268% |
+| 0.264 - 0.430 | 0.337 | 0.458% |
+| 0.430 - 0.685 | 0.539 | 0.920% |
+| 0.685 - 0.912 (top decile) | 0.852 | 1.382% |
+
+The top decile — cells the model scores at a mean 85% ignition probability — actually ignites 1.38% of
+the time on val (0.72% on test's equivalent bucket). Every bucket is monotonically ordered correctly
+(higher predicted score really does mean higher observed rate, which is exactly why the *rank* metrics
+above look good), but the absolute scale is off by roughly two orders of magnitude across the board,
+worst at the high end where it matters most for anyone reading the number literally.
+
+**Why, mechanically:** both `fit_random_forest` and `fit_logistic_regression` use
+`class_weight="balanced"` (see [Baseline-first methodology](#baseline-first-methodology) above) —
+that's a deliberate, correct fix for the optimizer collapsing to "always predict majority class"
+during *fitting*, but it works by upweighting minority-class samples, which pushes `predict_proba`'s
+output toward the artificially-rebalanced distribution the trees were actually fit against rather
+than the true ~0.1-0.3% base rate. This is a known, expected side effect of `class_weight="balanced"`
+— not a bug, and not something the earlier feature-drop or hyperparameter re-tuning on this page
+would have caught, since none of `pr_auc`/`roc_auc`/`top_10pct_capture` can see it.
+
+**What this does and doesn't mean:** the served model's *ranking* is still real and still the thing
+`/risk-map` and the top-10%-capture story above rely on — nothing on this page about relative risk
+changes. What changes is that `ignition_probability` in `api/main.py`'s responses should be read as a
+**relative risk score, not a literal probability** — "this cell is much higher-risk than that one,"
+not "this cell has an N% chance of burning" — see the caveat added to
+[07-serving.md](07-serving.md#calibration-what-ignition_probability-does-and-doesnt-mean). Fixing the
+absolute scale (e.g. `sklearn.calibration.CalibratedClassifierCV` with isotonic or Platt scaling,
+fit on val) is a legitimate follow-up, but it's a separate decision from this measurement — isotonic
+calibration on a split with only ~800 positives risks overfitting the calibration curve itself, and
+recalibrating would need its own held-out check rather than reusing val/test as both the calibration
+fit and the evaluation set.
+
+### Is the miscalibration itself stable across years?
+
+The [rolling-origin backtest](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset)
+above already showed `top_10pct_capture` swings wildly by holdout year. `evaluation/backtest.py` also
+computes Brier score and a reliability table for each of the same 8 folds, which answers a question
+the single val/test calibration numbers above can't: is the *miscalibration factor* at least a stable
+correction to apply, even if ranking performance isn't?
+
+| year | positives | brier score | base-rate floor | brier ratio | top-decile mean predicted | top-decile observed | top-decile ratio |
+|---|---|---|---|---|---|---|---|
+| 2017 | 1,433 | 0.2056 | 0.0059 | 35.0x | 0.862 | 1.82% | 47x |
+| 2018 | 229 | 0.0900 | 0.0009 | 95.4x | 0.795 | 0.24% | 332x |
+| 2019 | 57 | 0.0506 | 0.0002 | 215.2x | 0.585 | 0.05% | 1,091x |
+| 2020 | 43 | 0.0868 | 0.0002 | 489.3x | 0.772 | 0.03% | 2,673x |
+| 2021 | 2,628 | 0.1826 | 0.0107 | 17.0x | 0.888 | 2.93% | 30x |
+| 2022 | 98 | 0.1388 | 0.0004 | 343.5x | 0.855 | 0.03% | 2,590x |
+| 2023 | 802 | 0.1233 | 0.0033 | 37.4x | 0.852 | 1.38% | 62x |
+| 2024 | 242 | 0.1048 | 0.0010 | 105.1x | 0.814 | 0.74% | 110x |
+
+**No — it's not stable either, and arguably worse than the ranking metric.** The Brier ratio alone
+spans 17x to 489x (a ~29x spread), and the top-decile ratio spans 30x to 2,673x (an ~88x spread) — a
+single "divide the raw probability by 50" correction that looked right in one year would be off by
+another order of magnitude in another.
+
+**But this needs one honest caveat before treating it at face value:** each `reliability_table` bin
+holds ~24,000 (cell, date) rows, but in a sparse fire year almost none of them are actual fires — the
+top-decile *observed rate* in a year with only 43-98 total positives is being estimated from a
+handful of real fires landing in that one bin, and one extra or missing fire swings that rate (and
+therefore the ratio) enormously in percentage terms. The pattern in the table above is consistent with
+that: the two years with by far
+the most positives (2021's 2,628, 2017's 1,433) — where the top-decile observed rate is estimated from
+enough real fires to be statistically meaningful — show the *smallest and most similar* ratios (30x,
+47x), while the sparsest years (2019's 57, 2020's 43, 2022's 98) show the wildest and largest ones. The
+Brier ratio (computed over the *whole* holdout year, not just one bin of it) is somewhat less exposed
+to this but shows the same shape (17-37x for the two big-fire years vs. 95-489x for the sparse ones).
+
+**Practical reading:** the most statistically trustworthy estimate of "how miscalibrated is this model,
+really" comes from the years with the most fires to estimate an observed rate from — 2017/2021/2023 all
+cluster in the **17-47x** range for the Brier ratio, which is a more defensible number to reason about
+than the full 17-489x spread. But this doesn't rescue the case for recalibrating now: a correction
+factor estimated mostly from three unusually severe fire years (2017, 2021, and 2023, the latter itself
+close to 2017/2021 in severity) is exactly the kind of single-scenario overfit this whole investigation
+exists to catch — there is no evidence yet that the *same* correction would hold in a below-average
+year like 2019 or 2020, and the small-sample years are too noisy to confirm or rule that out either
+way. **Recommendation: don't fit a single static recalibration yet.** If/when this gets revisited, pool
+observed-vs-predicted data across many years (not just the high-confidence ones) before fitting, and
+validate the resulting calibrator's stability across individual holdout years the same way this table
+does — a calibrator that only gets checked in aggregate could hide the exact same year-to-year
+instability the aggregate `ignition_probability` numbers already did.

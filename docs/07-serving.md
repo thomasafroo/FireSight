@@ -110,6 +110,24 @@ an oversight, it's the only thing that works for a file:// frontend. Deploying t
 real origin (a dev server or real hosting) is the point at which `FIRESIGHT_CORS_ORIGINS` should be
 set to that exact origin, not `*`.
 
+### Calibration: what `ignition_probability` does and doesn't mean
+
+`/predict` and `/predict/live` both return `ignition_probability` as a bare float — the obvious
+reading is "this cell has an N% chance of igniting today." `evaluation/calibration.py` checked whether
+that reading is actually justified, and it isn't: the served model's raw probabilities are off from
+the true observed rate by roughly two orders of magnitude (a cell scored at ~85% actually ignites
+about 1.4% of the time on the 2023 validation set) — an expected side effect of
+`class_weight="balanced"` in training, not a bug. Full numbers and mechanism in [Modeling &
+evaluation](06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-real-probability).
+
+What still holds: **relative** ordering. A cell scored higher than another really is more likely to
+ignite than the other, which is exactly what `/risk-map`'s coloring and the whole top-10%-capture
+story rely on — see [the frontend's relative-coloring choice](#the-frontend-frontendindexhtml) below,
+which turns out to be the right call for a second reason beyond the one already documented there. What
+doesn't hold is reading `ignition_probability` as a literal, calibrated probability of anything — treat
+it as a **relative risk score** until/unless a calibration step (e.g. `CalibratedClassifierCV`) is
+added and separately validated.
+
 ## The frontend (`frontend/index.html`)
 
 A single static HTML file (Leaflet via CDN, vanilla JS, no build step, no framework) — deliberately
@@ -118,16 +136,28 @@ scaling up or polishing). It renders one circle marker per grid cell, colored by
 outlined for cells with a real recorded ignition that day, by calling `/risk-map` directly from the
 browser.
 
-**Why risk is colored relative to that day's own maximum, not a fixed 0–1 scale:** predicted
-probabilities are small by construction (a rare-event base rate around 0.2%, and PR-AUC is still low
-in absolute terms — see
-[Modeling & evaluation](06-modeling-and-evaluation.md#baseline-results-2023-validation-set)).
-Coloring against a fixed 0–1 range would render nearly every marker on nearly every day as the same
-pale "low risk" color, since even the highest-risk cell on a calm day rarely clears much above a few
-percent in absolute probability — which would make the map look broken rather than calm. Scaling
-each date's colors to that date's own max risk keeps the map informative (which cells are relatively
-higher-risk *today*) at the cost of not being comparable in absolute color across different dates —
-an explicit, documented tradeoff, not an oversight.
+**Why risk is colored relative to that day's own maximum, not a fixed 0–1 scale:** two independent
+reasons, one about the underlying rarity of fires and one about the model's raw output specifically.
+First, most days genuinely are low-risk across the board — fires are rare by construction (base rate
+around 0.1–0.3%, see [Modeling &
+evaluation](06-modeling-and-evaluation.md#baseline-results-2023-validation-set)) — so on a calm day,
+coloring against a fixed 0–1 range would render nearly every marker the same pale "low risk" color,
+making the map look broken rather than calm. Second, and separately, `ignition_probability` isn't a
+calibrated probability at all — see [Calibration](#calibration-what-ignition_probability-does-and-
+doesnt-mean) above — so a fixed 0–1 scale would be anchoring to a number whose absolute value doesn't
+mean what it looks like it means, on top of the rarity problem. Scaling each date's colors to that
+date's own max risk sidesteps both issues at once: it keeps the map informative (which cells are
+relatively higher-risk *today*) without ever needing the raw value to be absolutely meaningful, at the
+cost of not being comparable in absolute color across different dates — an explicit, documented
+tradeoff, not an oversight.
+
+**City search shows that city's actual risk, not just a map pan.** Typing a city name finds the
+nearest already-loaded `/risk-map` row by straight-line distance and reports its risk (and whether a
+real fire was recorded there), reusing the response already fetched for the selected date rather than
+issuing a second request. Towns outside the modeled bbox (e.g. Lillooet, Lytton, Clearwater — see the
+`CITIES` list's own comment) still resolve to *some* nearest cell, since the grid has no hard edge to
+stop a nearest-neighbor search at — the UI flags this explicitly (`~29km away — outside the fitted
+grid`) rather than silently presenting a distant cell's number as if it were that town's own risk.
 
 ## Running it locally
 

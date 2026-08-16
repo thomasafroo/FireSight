@@ -41,9 +41,35 @@ bbox means a much bigger grid, more raw FIRMS/ERA5-Land volume, and a per-row re
 approximation in `features/grid.py` that would need correcting — deliberately kept out of scope for
 this project rather than backed into.
 
+**Known limitation:** `ignition_probability` (from `/predict` and `/predict/live`) is a reliable
+*relative* risk ranking but not a calibrated probability — a cell scored ~85% actually ignites about
+1.4% of the time. This is an expected side effect of `class_weight="balanced"` in training, not a
+bug. Worse, the size of that miscalibration isn't even stable year to year (a rolling-origin check
+found the gap between predicted and observed risk swinging from ~17x to ~490x depending on the
+holdout year), so there's no single correction factor to apply yet either; see [Modeling &
+evaluation](docs/06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-real-probability).
+
+**Known limitation:** the model's headline top-10%-capture number (71.9%, from the original single
+val/test split) is close to the best year out of eight backtested — a rolling-origin backtest across
+2017-2024 found a mean of 30.8%, a median of 26.2%, and a range of 8.2%-74.4%, all on the exact same
+tuned model. Cite the range or the median, not 71.9%, when describing expected real-world performance;
+see [Modeling & evaluation](docs/06-modeling-and-evaluation.md#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset).
+Most of that swing tracks which months a year's fires happen to land in (r=0.63 with Jul/Aug fire
+share); the residual is concentrated in BC's two most extreme fire seasons (2017, 2021) specifically,
+where a fixed annual top-10% ranking budget breaks down on days with 100+ simultaneous ignitions and
+province-wide extreme heat compresses the cell-to-cell weather variation the model ranks on — see [Why
+performance swings by month and
+year](docs/06-modeling-and-evaluation.md#why-performance-swings-by-month-and-year).
+
 **Open, not-yet-decided next steps:**
 
 - Adding a neural network (see `research/neural-networks.md` for a feasibility writeup)
+- Recalibrating `ignition_probability` (e.g. `CalibratedClassifierCV`) so the raw number means what
+  it looks like it means, not just ranks correctly — checked and deliberately **not** started yet: the
+  per-year miscalibration factor is itself unstable (17x-490x depending on the holdout year), so a
+  calibrator fit today risks the same single-scenario overfitting problem the backtest just caught for
+  the ranking metrics. Needs pooling many years (not just the high-fire, low-noise ones) before fitting,
+  and its own per-year stability check after
 
 ## Project layout
 
