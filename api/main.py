@@ -1,33 +1,43 @@
 """FastAPI inference service wrapping the trained wildfire ignition model.
 
-Two endpoints, deliberately scoped small for the MVP:
+Three endpoints:
 
 - POST /predict — score one (cell, day)'s worth of already-computed
   features. Does *not* fetch live weather or run feature engineering
-  itself; the caller supplies feature values directly. Wiring this up
-  to a live ERA5 feed is future work, out of scope for "wrap the
-  trained model in an API" — see docs/README.md's project status.
+  itself; the caller supplies feature values directly.
+- GET /predict/live — score a grid cell's *current* conditions by
+  fetching recent weather from Open-Meteo and running it through the
+  same feature-engineering pipeline training uses — see
+  features/live_weather.py and docs/07-serving.md.
 - GET /risk-map — a historical demo endpoint: for a date already in the
   processed dataset, returns every cell's predicted risk *and* the
-  actual recorded label, so the eventual frontend risk map has
-  something real to render without needing a live data feed.
+  actual recorded label, so the frontend risk map has something real to
+  render without needing a live data feed.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, create_model
 
 from firesight.features.grid import build_grid_cells
+from firesight.features.live_weather import build_live_feature_row
 from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
-from firesight.training.baseline import DATE_COLUMN, LABEL_COLUMN
+from firesight.training.baseline import (
+    DATE_COLUMN,
+    FIRE_SEASON_END,
+    FIRE_SEASON_START,
+    LABEL_COLUMN,
+)
 from firesight.training.export_model import MODEL_PATH
 from firesight.training.persist import ModelBundle, load_model_bundle
 
@@ -47,17 +57,40 @@ async def lifespan(app: FastAPI):
     bundle = load_model_bundle(MODEL_BUNDLE_PATH)
     state["bundle"] = bundle
     state["feature_request_model"] = _build_feature_request_model(bundle)
+    # Always available (pure computation from the bbox, no file needed) —
+    # /predict/live needs a cell's lat/lon regardless of whether the
+    # historical dataset parquet has been built on this deployment.
+    state["grid_cells"] = build_grid_cells(BC_KAMLOOPS_BBOX)
 
     if DATASET_PATH.exists():
         keep = [DATE_COLUMN, "cell_id", LABEL_COLUMN, *bundle.feature_columns]
         state["dataset"] = pd.read_parquet(DATASET_PATH, columns=keep)
-        state["grid_cells"] = build_grid_cells(BC_KAMLOOPS_BBOX)
     else:
         state["dataset"] = None
-        state["grid_cells"] = None
 
     yield
     state.clear()
+
+
+def _reject_if_outside_fire_season(target_date: dt.date) -> None:
+    """Shared guard for /risk-map and /predict/live — see docs/07-serving.md.
+
+    The served model is trained exclusively on FIRE_SEASON_START..END (any
+    year); scoring a date outside that window would extrapolate from a
+    model that has never seen a single winter/shoulder-season row.
+    """
+    month_day = target_date.strftime("%m-%d")
+    if not (FIRE_SEASON_START <= month_day <= FIRE_SEASON_END):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{target_date} falls outside the fire season window the served model was trained "
+                f"on ({FIRE_SEASON_START} to {FIRE_SEASON_END}, any year). Predictions outside this "
+                "window would be extrapolating from a model that has never seen winter/shoulder-"
+                "season data — see docs/06-modeling-and-evaluation.md#known-limitation-a-winter"
+                "shoulder-season-blind-spot."
+            ),
+        )
 
 
 def _build_feature_request_model(bundle: ModelBundle) -> type[BaseModel]:
@@ -78,12 +111,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Wide open for the local MVP frontend (a static file served with no fixed
-# origin during development). Tighten to the real frontend's origin before
-# this is ever deployed anywhere reachable outside localhost.
+# Wide open (`*`) by default, matching the local MVP frontend: a static file
+# opened directly in a browser (no dev server) sends no `Origin` header CORS
+# can match against, so an explicit allowlist would just break it. Set
+# FIRESIGHT_CORS_ORIGINS to a comma-separated list of real origins (e.g.
+# "https://firesight.example.com") before deploying anywhere reachable
+# outside localhost — leaving it unset keeps today's dev-only default.
+_cors_origins_env = os.environ.get("FIRESIGHT_CORS_ORIGINS")
+_cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()] if _cors_origins_env else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
@@ -114,6 +153,50 @@ def predict(features: dict) -> dict[str, float]:
     return {"ignition_probability": probability}
 
 
+@app.get("/predict/live")
+def predict_live(
+    cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
+    date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
+) -> dict[str, Any]:
+    """Score a grid cell's *current* conditions via a live weather feed, not historical replay.
+
+    Unlike /predict (which requires the caller to already have computed
+    feature values) this fetches recent weather itself from Open-Meteo and
+    runs it through the same feature-engineering functions training uses —
+    see features/live_weather.py and docs/07-serving.md.
+    """
+    grid_cells: pd.DataFrame = state["grid_cells"]
+    cell = grid_cells[grid_cells["cell_id"] == cell_id]
+    if cell.empty:
+        raise HTTPException(status_code=404, detail=f"Unknown cell_id {cell_id!r}.")
+
+    today = dt.datetime.now(dt.UTC).date()
+    target_date = dt.date.fromisoformat(date) if date else today
+    if target_date > today:
+        raise HTTPException(status_code=400, detail=f"{target_date} is in the future — live weather isn't available yet.")
+    _reject_if_outside_fire_season(target_date)
+
+    latitude = float(cell.iloc[0]["latitude"])
+    longitude = float(cell.iloc[0]["longitude"])
+    bundle: ModelBundle = state["bundle"]
+
+    try:
+        features = build_live_feature_row(latitude, longitude, target_date, cell_id)
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Live weather fetch failed: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {
+        "cell_id": cell_id,
+        "date": target_date.isoformat(),
+        "latitude": latitude,
+        "longitude": longitude,
+        "ignition_probability": bundle.predict_proba(features),
+        "weather_source": "open-meteo archive API (ERA5-based reanalysis + near-real-time blend)",
+    }
+
+
 @app.get("/risk-map")
 def risk_map(date: str = Query(..., description="YYYY-MM-DD, must exist in the processed dataset")) -> list[dict[str, Any]]:
     """Predicted risk + actual label for every grid cell on a historical date."""
@@ -121,8 +204,11 @@ def risk_map(date: str = Query(..., description="YYYY-MM-DD, must exist in the p
     if dataset is None:
         raise HTTPException(status_code=503, detail="Historical dataset not available on this deployment.")
 
+    timestamp = pd.Timestamp(date)
+    _reject_if_outside_fire_season(timestamp.date())
+
     bundle: ModelBundle = state["bundle"]
-    day_rows = dataset[dataset[DATE_COLUMN] == pd.Timestamp(date)]
+    day_rows = dataset[dataset[DATE_COLUMN] == timestamp]
     if day_rows.empty:
         raise HTTPException(status_code=404, detail=f"No data for {date} in the processed dataset.")
 

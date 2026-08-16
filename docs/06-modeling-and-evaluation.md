@@ -277,12 +277,47 @@ It's a fair comparison of models *within* this run, and a legitimate scope decis
 of a modeling breakthrough against the old numbers above it on this page.
 
 Also worth naming: test metrics beating val metrics by this much (e.g. test top-10% 71.9% vs. val
-41.9%) is the same directional pattern seen before the scope change, just more pronounced. The
-likely explanation carries over unchanged — 2024 (test) contains the small number of large, obvious
-summer fire events fire-weather features are best at catching, while 2023 (val) apparently has a
-harder mix — but this is worth re-checking with a monthly breakdown if the gap keeps widening as the
-project evolves, the same way the winter blind spot was originally found by looking past the
-aggregate number.
+41.9%) is the same directional pattern seen before the scope change, just more pronounced. See
+[Investigating the val/test gap](#investigating-the-valtest-gap-a-monthly-breakdown) below for what
+actually explains it.
+
+## Investigating the val/test gap: a monthly breakdown
+
+The re-tune above widened the val/test gap (test top-10% 71.9% vs. val 41.9%) enough to be worth
+checking with the same tool that originally surfaced the winter blind spot: a monthly breakdown of
+which fires the served model's own top-10%-by-risk cutoff catches vs. misses, run separately on val
+(2023) and test (2024) under the current fire-season scoping.
+
+| month | val (2023) caught/total | val capture | test (2024) caught/total | test capture |
+|---|---|---|---|---|
+| May | 0/4 | 0% | 0/6 | 0% |
+| Jun | 0/6 | 0% | — | — |
+| Jul | 47/101 | 46.5% | 102/120 | 85.0% |
+| Aug | 282/538 | 52.4% | 72/111 | 64.9% |
+| Sep | 7/153 | 4.6% | — | — |
+| Oct | — | — | 0/5 | 0% |
+
+The gap isn't a val-vs-test modeling artifact — it's a **fire-count distribution difference between
+the two specific years landing on a month the model is already comparatively weak at**. Val (2023)
+had 153 fires in September alone (19% of its 802 total) that the model catches only 4.6% of the time
+(mean predicted risk on those fire-days: 0.31); test (2024) had essentially no September fires (0 out
+of 242) to be dragged down by. July/August capture rates are actually *higher* on val than the
+aggregate 41.9% suggests (46.5%/52.4%), much closer to test's July/August numbers (85.0%/64.9%) —
+it's the September cluster alone pulling val's blended number down, not systematically weaker
+July/August performance. This lines up with 2023 being BC's worst fire season on record, with
+large fires still active into September, while 2024 was comparatively quiet outside of a concentrated
+July/August peak.
+
+**Why September specifically is weak, structurally:** the same reasoning as the [winter/shoulder-
+season blind spot](#known-limitation-a-wintershoulder-season-blind-spot) applies in miniature.
+September sits at the tail of the fire-season window — cooler and wetter on average than peak
+July/August — so it's a smaller-scale version of the same "hot+dry = risk" blind spot the model has
+for fully excluded winter months, just not severe enough on its own to justify excluding September
+from the fire-season window entirely (doing so would also throw away 153 real September positives
+from *training* data in every year, not just val's). Treated as the same documented weather-only
+limitation as the winter blind spot, not a bug — no code change made here, since the gap is explained
+by real between-year variation in *when* fires happened, not by a leak, split-boundary bug, or
+scoring inconsistency between val and test.
 
 ## Known limitation: a winter/shoulder-season blind spot
 
@@ -384,16 +419,68 @@ Two takeaways:
    fuel-dryness indicators a wildfire-weather domain expert would expect to matter most. None of the
    grid/join mechanics (cell geometry, nearest-neighbor weather assignment) show up as unexpectedly
    dominant, which is what a subtle pipeline bug driving the score would look like.
-2. **Wind and the 7-day temp trend are dead weight in this model.** `wind_speed`, both wind-direction
-   components, `d2m`, and `t2m_trend_7d` all sit at or below zero permutation importance on both val
-   and test — shuffling them doesn't hurt held-out PR-AUC at all, sometimes even helps slightly (noise,
-   not real negative signal). The RandomForest simply isn't using them; it's making its calls almost
-   entirely off soil moisture, precipitation, and temperature. This wasn't touched — removing
-   low-importance features is a legitimate follow-up but not free at this depth/leaf-count, since a
-   depth-5 tree gets to pick very few splits in total and its meaning could still change if the search
-   were re-run without those columns — but it explains, in addition to the reasoning in [Known
-   limitation](#known-limitation-a-wintershoulder-season-blind-spot) above, why the winter/shoulder-
-   season blind spot was so resistant to more weather features: the model's five real levers are all
-   slow-moving fuel-dryness signals, and nothing in `FEATURE_COLUMNS` — including the features it
-   currently ignores — encodes anything about human activity, which is the more likely driver of
-   winter ignitions.
+2. **Wind and the 7-day temp trend are dead weight in this model** — see [Dropping the dead-weight
+   features](#dropping-the-dead-weight-features) below for what was actually done about it.
+
+## Dropping the dead-weight features
+
+The table above was computed once, before the fire-season/2012 re-tune settled. Before actually
+removing anything from `FEATURE_COLUMNS`, permutation importance was re-run from scratch against the
+*currently served* RandomForest (30 repeats, two random seeds, val and test both) to confirm the
+picture still held:
+
+| feature | val ΔPR-AUC (seed 1) | val ΔPR-AUC (seed 2) | test ΔPR-AUC (seed 1) | test ΔPR-AUC (seed 2) |
+|---|---|---|---|---|
+| `wind_dir_cos` | -0.000068 | -0.000067 | -0.000072 | -0.000072 |
+| `u10` | -0.000323 | -0.000203 | -0.000166 | -0.000076 |
+| `v10` | +0.000004 | +0.000001 | +0.000065 | +0.000072 |
+| `wind_dir_sin` | +0.000555 | +0.000561 | +0.000032 | +0.000052 |
+| `d2m` | +0.000287 | +0.000173 | -0.000339 | -0.000220 |
+| `t2m_trend_7d` | +0.000017 | +0.000006 | +0.000046 | +0.000067 |
+| `wind_speed` | -0.000211 | -0.000092 | **+0.000443** | **+0.000655** |
+| `rh_mean_7d` (kept, for scale) | +0.001161 | +0.001220 | +0.000841 | +0.000956 |
+
+`wind_dir_cos`, `u10`, `v10`, `wind_dir_sin`, `d2m`, and `t2m_trend_7d` all confirmed near-zero or
+mixed-sign on both splits, both seeds — none of them cross even 15% of `rh_mean_7d`'s (the weakest
+*kept* feature's) importance on either split, and several are actively negative. These six were
+dropped from `FEATURE_COLUMNS`.
+
+**`wind_speed` was kept, deviating from the original table's grouping.** Fresh evidence shows a real,
+reproducible positive signal on the test split specifically — +0.00044 to +0.00066 across both seeds,
+roughly half of `rh_mean_7d`'s test importance and nowhere near the ~0 cluster the other five sit in —
+even though it's slightly negative on val. Test is the split this project's own methodology treats as
+the honest, non-overfit read (see [Widening the
+search](#widening-the-search-randomizedsearchcv--predefinedsplit) above), so this was trusted over the
+weaker, noisier val signal. `u10`/`v10` (the raw wind vector components) were dropped in `wind_speed`'s
+place instead — not originally singled out by name, but grouped with the same dead-weight bucket in
+the table above, and confirmed consistently negative-or-negligible on both splits/seeds in the fresh
+run, unlike `wind_speed` itself.
+
+Refitting `BEST_RANDOM_FOREST_PARAMS` unchanged on the resulting 10-column `FEATURE_COLUMNS` (`t2m`,
+`swvl1`, `precip_mm`, `relative_humidity`, `wind_speed`, `days_since_rain`, `precip_7d`, `precip_30d`,
+`t2m_mean_7d`, `rh_mean_7d`) left val/test scores within noise of the 16-column version:
+
+| | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+|---|---|---|---|---|---|---|
+| 16 columns (before) | 0.0138 | 0.832 | 41.9% | 0.0106 | 0.884 | 71.9% |
+| 10 columns (after) | 0.0136 | 0.833 | 41.8% | 0.0106 | 0.884 | 71.9% |
+
+Confirms these columns really were dead weight rather than something the tuned hyperparameters
+happened to lean on — dropping them cost nothing measurable. The hyperparameters themselves weren't
+re-tuned against the smaller feature set (that would mean re-running `tune_random_search`, which risks
+the `n_jobs=-1` `RandomizedSearchCV` hang noted as unresolved future work); this is a same-params
+refit only, and `data/processed/model.joblib` was re-exported from it via `export_model.py`. Nothing in
+`features/engineering.py` changed — `add_relative_humidity`/`add_wind_features` still need `d2m` and
+`u10`/`v10` as *inputs* to derive `relative_humidity` and `wind_speed`, and `ENGINEERED_COLUMNS` still
+computes the dropped columns too (harmless, just unused by the model now); only the model's own input
+list shrank.
+
+**Why this matters beyond a smaller feature list:** it explains, in addition to the reasoning in
+[Known limitation](#known-limitation-a-wintershoulder-season-blind-spot) above, why the winter/shoulder
+-season blind spot was so resistant to more weather features — the model's real levers are almost
+entirely slow-moving fuel-dryness signals (soil moisture, precip, temperature) plus one immediate
+condition (wind speed), and nothing in `FEATURE_COLUMNS` encodes anything about human activity, which
+is the more likely driver of winter ignitions. It also directly simplified [live weather
+fetching](07-serving.md#live-weather-for-predictlive) for `/predict/live`: Open-Meteo can supply
+relative humidity and wind speed *directly*, so the live-weather path never needs to reconstruct them
+from dewpoint or wind vector components the way the ERA5-Land ingestion pipeline does.

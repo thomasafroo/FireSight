@@ -39,6 +39,13 @@ MODEL_PATH = Path("data/processed/model.joblib")
 # docs/06-modeling-and-evaluation.md#re-tuning-after-the-fire-season-scope-change. Again the
 # randomized-search RF beat the grid-search RF on every test metric despite a slightly lower
 # val PR-AUC, so it's the pick for the same overfitting-a-single-fold reason as last time.
+#
+# Params unchanged since, but re-exported again 2026-08-15 after dropping 6 dead-weight columns
+# from FEATURE_COLUMNS (d2m, u10, v10, wind_dir_sin, wind_dir_cos, t2m_trend_7d — see
+# docs/06-modeling-and-evaluation.md#feature-importance-what-the-model-is-actually-leaning-on).
+# Refitting these same params on the smaller feature set left val/test scores within noise of the
+# 16-feature version (e.g. test top-10% capture unchanged at 71.9%), confirming those columns
+# really were dead weight rather than something the params happened to lean on.
 BEST_RANDOM_FOREST_PARAMS = {
     "n_estimators": 238,
     "max_depth": 6,

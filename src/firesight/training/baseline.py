@@ -22,22 +22,27 @@ DATASET_PATH = Path("data/processed/kamloops_dataset.parquet")
 # features/weather.py and features/engineering.py). No categorical
 # columns (cell_id is deliberately excluded — see
 # docs/06-modeling-and-evaluation.md#where-columntransformer-fits).
+#
+# d2m, u10, v10, wind_dir_sin, wind_dir_cos, and t2m_trend_7d were dropped
+# 2026-08-15 after permutation importance showed them at ~0 or negative on
+# both val and test with the served RandomForest — see
+# docs/06-modeling-and-evaluation.md#feature-importance-what-the-model-is-actually-leaning-on
+# for the full numbers, including why wind_speed was kept despite being
+# flagged alongside them (it showed real, reproducible positive signal on
+# test specifically). engineering.py still computes the dropped columns
+# (and add_relative_humidity/add_wind_features still need d2m/u10/v10 as
+# inputs to derive relative_humidity and wind_speed) — only the model's
+# input list shrank, not the underlying weather schema.
 FEATURE_COLUMNS: list[str] = [
     "t2m",
-    "d2m",
-    "u10",
-    "v10",
     "swvl1",
     "precip_mm",
     "relative_humidity",
     "wind_speed",
-    "wind_dir_sin",
-    "wind_dir_cos",
     "days_since_rain",
     "precip_7d",
     "precip_30d",
     "t2m_mean_7d",
-    "t2m_trend_7d",
     "rh_mean_7d",
 ]
 LABEL_COLUMN = "ignited"

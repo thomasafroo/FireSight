@@ -20,7 +20,9 @@ verified live, not just unit-tested:
   further with a `RandomizedSearchCV`+`PredefinedSplit` search. RandomForest is the model currently
   being served.
 - **Serving:** the served model swaps with a one-line change and zero edits to `api/main.py`,
-  confirmed by actually swapping it live and re-checking `/health` and `/risk-map`.
+  confirmed by actually swapping it live and re-checking `/health` and `/risk-map`. `/predict/live`
+  scores a grid cell's current conditions via a live weather feed (Open-Meteo), rather than only
+  replaying historical dates.
 - **Frontend:** a minimal Leaflet map replaying historical risk against real recorded outcomes.
 
 Full reasoning and current results: `docs/README.md`.
@@ -34,12 +36,14 @@ failed, so rather than keep chasing it, the project now excludes those months fr
 entirely and focuses on the summer fire-weather signal the model actually has. See [Modeling &
 evaluation](docs/06-modeling-and-evaluation.md#scoping-to-fire-season).
 
+**Decided:** staying scoped to the Kamloops Fire Centre rather than scaling to all of BC. A larger
+bbox means a much bigger grid, more raw FIRMS/ERA5-Land volume, and a per-row reference-latitude
+approximation in `features/grid.py` that would need correcting — deliberately kept out of scope for
+this project rather than backed into.
+
 **Open, not-yet-decided next steps:**
 
-- Scaling past Kamloops to all of BC
-- Adding a neural network
-- Wiring `/predict` to a live weather feed instead of historical replay
-- Real deployment (CORS is currently wide open, for local dev only)
+- Adding a neural network (see `research/neural-networks.md` for a feasibility writeup)
 
 ## Project layout
 
@@ -92,6 +96,8 @@ uv run python -m firesight.training.advanced_models      # RandomForest + XGBoos
 uv run python -m firesight.training.export_model         # persists the current-best model -> data/processed/model.joblib
 uv run uvicorn api.main:app --reload                      # serves it on :8000
 # then open frontend/index.html in a browser
+# GET /predict/live?cell_id=<id>&date=YYYY-MM-DD scores current conditions (needs internet access to
+# reach Open-Meteo; no API key or account needed, unlike the ERA5-Land backfill above)
 ```
 
 ## Design notes
