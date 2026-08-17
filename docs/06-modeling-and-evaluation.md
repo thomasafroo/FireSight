@@ -658,6 +658,46 @@ fetching](07-serving.md#live-weather-for-predictlive) for `/predict/live`: Open-
 relative humidity and wind speed *directly*, so the live-weather path never needs to reconstruct them
 from dewpoint or wind vector components the way the ERA5-Land ingestion pipeline does.
 
+## Testing the sequence-modeling hypothesis
+
+`research/neural-networks.md` argues against a neural network replacing the served RandomForest, but
+names one question it doesn't rule out: does a model that sees the **raw** last-30-days weather
+sequence per cell — instead of the hand-engineered rolling summaries above (`t2m_mean_7d`,
+`precip_30d`, ...) — capture a nonlinear temporal *shape* those summaries flatten away?
+`training/sequence_model.py` runs that experiment: a small 1D-CNN (two `Conv1d` layers, global
+average pooling, a small dense head) over 5 raw daily channels
+(`t2m`/`precip_mm`/`swvl1`/`relative_humidity`/`wind_speed`, the same quantities behind the current
+non-rolling features), trained with `BCEWithLogitsLoss(pos_weight=...)` — the PyTorch equivalent of
+`class_weight="balanced"` — under the exact same temporal train/val/test split as everything else on
+this page. The RandomForest side of the comparison is refit with the same tuned
+`BEST_RANDOM_FOREST_PARAMS` on the *exact same row subset* the CNN sees (a handful of rows lose their
+30-day raw window to date gaps that don't affect the rolling features), so the comparison is
+apples-to-apples on identical rows, not just similar ones.
+
+Real result:
+
+| model                      | split      | pr_auc  | roc_auc | top_10pct_capture |
+| --------------------------- | ---------- | ------- | ------- | ------------------ |
+| RandomForest (tuned, same rows) | val (2023)  | **0.0136** | **0.833** | **41.8%** |
+| SequenceCNN                 | val (2023)  | 0.0117  | 0.787   | 37.9%              |
+| RandomForest (tuned, same rows) | test (2024) | **0.0106** | 0.884   | **71.9%**          |
+| SequenceCNN                 | test (2024) | 0.0062  | 0.883   | 68.6%              |
+
+The RandomForest wins on both splits, on every metric except test ROC-AUC (a near-tie, 0.884 vs.
+0.883) — most clearly on PR-AUC (roughly 1.2-1.7x higher) and top-10%-capture (4-5 points higher on
+both splits). The raw-sequence CNN did **not** find temporal shape the rolling-window features were
+missing; if anything, letting the model learn its own temporal summary from scratch, on a training
+set with only ~4,800 positive examples, generalized worse than the fixed 7-/30-day windows already
+being handed to a tree ensemble. This matches the general tabular-data literature
+`research/neural-networks.md` cites (tree ensembles beating deep learning on small, mostly-numeric
+tabular data) rather than being an exception to it — the one hypothesis that document left open is now
+closed, with a real negative result rather than an assumption.
+
+**Practical conclusion:** no change to the served model. `BEST_RANDOM_FOREST_PARAMS` (via
+`export_model.py`) stays the pick; the rolling-window features in `features/engineering.py` stay the
+right representation of weather history for this problem, not a simplification that's costing
+accuracy.
+
 ## Calibration: is `ignition_probability` a real probability?
 
 Every metric on this page so far — PR-AUC, ROC-AUC, `top_10pct_capture` — is **rank-only**: each one

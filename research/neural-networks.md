@@ -113,3 +113,11 @@ model that sees the raw 30-day weather sequence beat one that sees `t2m_mean_7d`
 RandomForest under the exact same `PredefinedSplit`/test-set-never-touched-during-tuning discipline
 the rest of this project already uses — not adopted on the general principle that "neural network" was
 next on an old plan.
+
+**Update: this experiment was actually run** — `training/sequence_model.py`, a small 1D-CNN over the
+raw daily weather sequence, benchmarked against the same tuned RandomForest on the exact same rows.
+Result: the RandomForest won on every metric but one (a near-tied test ROC-AUC), most clearly on
+PR-AUC and top-10%-capture. See [Testing the sequence-modeling
+hypothesis](../docs/06-modeling-and-evaluation.md#testing-the-sequence-modeling-hypothesis) for the
+full numbers. This closes the one open question this document left — no remaining neural-network angle
+here is recommended.

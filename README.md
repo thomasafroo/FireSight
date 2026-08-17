@@ -69,9 +69,13 @@ province-wide extreme heat compresses the cell-to-cell weather variation the mod
 performance swings by month and
 year](docs/06-modeling-and-evaluation.md#why-performance-swings-by-month-and-year).
 
-**Open, not-yet-decided next steps:**
-
-- Adding a neural network (see `research/neural-networks.md` for a feasibility writeup)
+**Neural network: tried, didn't win.** `research/neural-networks.md`'s one open hypothesis — a raw
+daily weather sequence capturing temporal shape the hand-engineered rolling windows flatten away —
+was tested for real in `training/sequence_model.py`: a small 1D-CNN benchmarked against the tuned
+RandomForest on identical rows. The RandomForest won on every metric but a near-tied test ROC-AUC,
+most clearly on PR-AUC and top-10%-capture. No change to the served model; see [Modeling &
+evaluation](docs/06-modeling-and-evaluation.md#testing-the-sequence-modeling-hypothesis) for the full
+numbers.
 
 ## Project layout
 
