@@ -136,11 +136,12 @@ def health() -> dict[str, Any]:
         "model_type": bundle.metadata.get("model_type"),
         "feature_columns": bundle.feature_columns,
         "val_scores": bundle.metadata.get("val_scores"),
+        "calibrated": bundle.calibrator is not None,
     }
 
 
 @app.post("/predict")
-def predict(features: dict) -> dict[str, float]:
+def predict(features: dict) -> dict[str, float | None]:
     """Score one (cell, day)'s feature vector. Body: {feature_name: value, ...}."""
     bundle: ModelBundle = state["bundle"]
     request_model = state["feature_request_model"]
@@ -149,8 +150,11 @@ def predict(features: dict) -> dict[str, float]:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    probability = bundle.predict_proba(validated.model_dump())
-    return {"ignition_probability": probability}
+    features = validated.model_dump()
+    return {
+        "ignition_probability": bundle.predict_proba(features),
+        "calibrated_probability": bundle.predict_calibrated_proba(features),
+    }
 
 
 @app.get("/predict/live")
@@ -193,6 +197,7 @@ def predict_live(
         "latitude": latitude,
         "longitude": longitude,
         "ignition_probability": bundle.predict_proba(features),
+        "calibrated_probability": bundle.predict_calibrated_proba(features),
         "weather_source": "open-meteo archive API (ERA5-based reanalysis + near-real-time blend)",
     }
 
@@ -215,8 +220,11 @@ def risk_map(date: str = Query(..., description="YYYY-MM-DD, must exist in the p
     probabilities = bundle.model.predict_proba(day_rows[bundle.feature_columns])[:, 1]
     result = day_rows[["cell_id", LABEL_COLUMN]].copy()
     result["risk_probability"] = probabilities
+    result["calibrated_risk_probability"] = (
+        bundle.calibrator.predict(probabilities) if bundle.calibrator is not None else None
+    )
     result = result.merge(state["grid_cells"], on="cell_id", how="left")
 
     return result.rename(columns={LABEL_COLUMN: "actual_ignited"})[
-        ["cell_id", "latitude", "longitude", "risk_probability", "actual_ignited"]
+        ["cell_id", "latitude", "longitude", "risk_probability", "calibrated_risk_probability", "actual_ignited"]
     ].to_dict(orient="records")

@@ -110,7 +110,7 @@ an oversight, it's the only thing that works for a file:// frontend. Deploying t
 real origin (a dev server or real hosting) is the point at which `FIRESIGHT_CORS_ORIGINS` should be
 set to that exact origin, not `*`.
 
-### Calibration: what `ignition_probability` does and doesn't mean
+### Calibration: `ignition_probability` vs `calibrated_probability`
 
 `/predict` and `/predict/live` both return `ignition_probability` as a bare float — the obvious
 reading is "this cell has an N% chance of igniting today." `evaluation/calibration.py` checked whether
@@ -122,11 +122,25 @@ evaluation](06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-
 
 What still holds: **relative** ordering. A cell scored higher than another really is more likely to
 ignite than the other, which is exactly what `/risk-map`'s coloring and the whole top-10%-capture
-story rely on — see [the frontend's relative-coloring choice](#the-frontend-frontendindexhtml) below,
-which turns out to be the right call for a second reason beyond the one already documented there. What
-doesn't hold is reading `ignition_probability` as a literal, calibrated probability of anything — treat
-it as a **relative risk score** until/unless a calibration step (e.g. `CalibratedClassifierCV`) is
-added and separately validated.
+story rely on — see [the frontend's relative-coloring choice](#the-frontend-frontendindexhtml) below.
+`ignition_probability`/`risk_probability` keep meaning exactly what they meant before: read them as a
+**relative risk score**, not a literal probability.
+
+`training/export_model.py::export_current_best` now also fits and attaches a calibrator, exposed
+alongside the raw score as `calibrated_probability` (`/predict`, `/predict/live`) and
+`calibrated_risk_probability` (`/risk-map`) — `null` if the loaded bundle predates this (check
+`/health`'s `"calibrated"` field). It's an `IsotonicRegression` fit on raw scores pooled across all 8
+of `evaluation/backtest.py`'s rolling-origin years (2017-2024), the exact methodology
+[the pooled, leave-one-year-out-validated calibration
+check](06-modeling-and-evaluation.md#does-pooled-leave-one-year-out-validated-calibration-actually-help)
+validated — a single-year fit was checked and rejected as unreliable before this was pooled. Read
+honestly: it's a real improvement (worst-case top-decile miscalibration drops from ~2,673x to ~51x in
+that check) but not a fully solved problem — the sparsest-fire years stay the least reliable even after
+calibration, so `calibrated_probability` is a much better estimate of true ignition frequency than the
+raw score, not a guaranteed-accurate one. `ignition_probability` stays the field to use for ranking
+(`/risk-map`'s coloring, any top-k logic) — the calibrator changes absolute magnitude, not order, so
+using `calibrated_probability` for ranking would just be a slower way to get the same ranking
+`ignition_probability` already gives.
 
 ## The frontend (`frontend/index.html`)
 

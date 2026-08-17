@@ -22,7 +22,12 @@ verified live, not just unit-tested:
 - **Serving:** the served model swaps with a one-line change and zero edits to `api/main.py`,
   confirmed by actually swapping it live and re-checking `/health` and `/risk-map`. `/predict/live`
   scores a grid cell's current conditions via a live weather feed (Open-Meteo), rather than only
-  replaying historical dates.
+  replaying historical dates. Every prediction endpoint also returns a calibrated probability
+  (`calibrated_probability`/`calibrated_risk_probability`) alongside the raw, relative-ranking-only
+  `ignition_probability`/`risk_probability` — an isotonic calibrator fit on scores pooled across all 8
+  of `evaluation/backtest.py`'s rolling-origin years, the same methodology validated by the
+  leave-one-year-out check below. See
+  [Serving](docs/07-serving.md#calibration-ignition_probability-vs-calibrated_probability).
 - **Frontend:** a minimal Leaflet map replaying historical risk against real recorded outcomes.
 
 Full reasoning and current results: `docs/README.md`.
@@ -46,8 +51,11 @@ this project rather than backed into.
 1.4% of the time. This is an expected side effect of `class_weight="balanced"` in training, not a
 bug. Worse, the size of that miscalibration isn't even stable year to year (a rolling-origin check
 found the gap between predicted and observed risk swinging from ~17x to ~490x depending on the
-holdout year), so there's no single correction factor to apply yet either; see [Modeling &
-evaluation](docs/06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-real-probability).
+holdout year), so there's no single correction factor to apply directly to `ignition_probability`
+itself; see
+[Modeling & evaluation](docs/06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-real-probability).
+A separate, pooled-across-years calibrator is now served alongside it (see the Status section above)
+rather than replacing it — ranking still relies on the raw score.
 
 **Known limitation:** the model's headline top-10%-capture number (71.9%, from the original single
 val/test split) is close to the best year out of eight backtested — a rolling-origin backtest across
@@ -64,17 +72,6 @@ year](docs/06-modeling-and-evaluation.md#why-performance-swings-by-month-and-yea
 **Open, not-yet-decided next steps:**
 
 - Adding a neural network (see `research/neural-networks.md` for a feasibility writeup)
-- Promoting a calibrated `ignition_probability` to the served model — investigated, not yet promoted.
-  `evaluation/calibration.py::leave_one_year_out_calibration_check` pooled 7 years of predictions to
-  calibrate the 8th (isotonic and sigmoid both tested), the way the per-year-instability finding above
-  said it needed to be checked. Result: a real, substantial improvement (worst-case top-decile
-  miscalibration drops from ~2,673x to ~51x) but not a solved problem — the *relative* spread between
-  the best- and worst-calibrated held-out year barely changes (~89x before pooling, ~95x after), and the
-  years that stay worst-calibrated are exactly the sparsest-fire years, where the true observed rate
-  itself is a noisy estimate from a handful of fires. See [Does pooled calibration actually
-  help?](docs/06-modeling-and-evaluation.md#does-pooled-leave-one-year-out-validated-calibration-actually-help)
-  for the full table. Kept evaluation-only rather than wired into serving, so this stays a next step
-  to make deliberately, not evidence acted on automatically because it was measured
 
 ## Project layout
 

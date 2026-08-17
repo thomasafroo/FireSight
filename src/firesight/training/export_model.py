@@ -4,12 +4,23 @@ Deliberately a separate, explicit step from `baseline.py`/`advanced_models.py`
 (which explore/compare) rather than auto-saving from either — promoting a
 model to "the one the API serves" should be a decision made after looking
 at the comparison, not a side effect of running a training script.
+
+Also fits the served model's probability calibrator here, for the same reason:
+`evaluation/calibration.py::leave_one_year_out_calibration_check` found that a
+calibrator only generalizes honestly if it's fit on scores pooled across many
+years, not one — see
+docs/06-modeling-and-evaluation.md#does-pooled-leave-one-year-out-validated-calibration-actually-help.
+That means exporting now costs 8 extra RandomForest refits (one per
+`backtest.py::HOLDOUT_YEARS` fold, ~10-15 min total) on top of the main fit —
+an accepted cost given this is already the project's one deliberate,
+infrequent promotion step, not something run casually.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from firesight.training.advanced_models import fit_random_forest
@@ -55,7 +66,7 @@ BEST_RANDOM_FOREST_PARAMS = {
 
 
 def export_current_best(dataset_path: Path = DATASET_PATH, out_path: Path = MODEL_PATH) -> ModelBundle:
-    """Fit the tuned RandomForest model on train and save it.
+    """Fit the tuned RandomForest model on train, fit its pooled calibrator, and save both.
 
     This is today's best *validated* model (see
     docs/06-modeling-and-evaluation.md) — beats both the Dummy floor and
@@ -64,6 +75,9 @@ def export_current_best(dataset_path: Path = DATASET_PATH, out_path: Path = MODE
     different winner later, since it only depends on the ModelBundle
     contract (predict_proba(dict) -> float), not on the model class.
     """
+    from firesight.evaluation.backtest import HOLDOUT_YEARS, run_rolling_origin_backtest
+    from firesight.evaluation.calibration import fit_isotonic_calibrator
+
     df = pd.read_parquet(dataset_path)
     df = filter_fire_season(df)
     train, val, test = temporal_split(df, TRAIN_END, VAL_END)
@@ -72,9 +86,18 @@ def export_current_best(dataset_path: Path = DATASET_PATH, out_path: Path = MODE
     val_scores = score_model(model, val)
     test_scores = score_model(model, test)
 
+    # Pooled, leave-one-year-out-validated calibration (see module docstring) rather than fitting
+    # on val/test alone — the whole point of the LOYO check was showing a single-year fit doesn't
+    # generalize reliably.
+    folds = run_rolling_origin_backtest(df, HOLDOUT_YEARS)
+    pooled_y_true = np.concatenate([fold.y_true for fold in folds])
+    pooled_y_score = np.concatenate([fold.y_score for fold in folds])
+    calibrator = fit_isotonic_calibrator(pooled_y_score, pooled_y_true)
+
     bundle = ModelBundle(
         model=model,
         feature_columns=FEATURE_COLUMNS,
+        calibrator=calibrator,
         metadata={
             "model_type": "RandomForest",
             "params": BEST_RANDOM_FOREST_PARAMS,
@@ -82,6 +105,8 @@ def export_current_best(dataset_path: Path = DATASET_PATH, out_path: Path = MODE
             "validated_on": f"{TRAIN_END} to {VAL_END}",
             "val_scores": val_scores,
             "test_scores": test_scores,
+            "calibration_method": "isotonic",
+            "calibration_pooled_years": HOLDOUT_YEARS,
         },
     )
     save_model_bundle(bundle, out_path)

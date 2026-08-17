@@ -1,7 +1,9 @@
+import numpy as np
 import pandas as pd
 import pytest
 import requests
 from fastapi.testclient import TestClient
+from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 
 from firesight.features.grid import build_grid_cells
@@ -13,15 +15,13 @@ FEATURES = ["t2m", "precip_mm"]
 A_REAL_CELL_ID = build_grid_cells(BC_KAMLOOPS_BBOX).iloc[0]["cell_id"]
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    # small, self-contained model + dataset so the API doesn't depend on the
-    # real multi-GB pipeline output being present when tests run
+def _build_client(tmp_path, monkeypatch, calibrator=None):
     train = pd.DataFrame({"t2m": [270.0, 300.0, 271.0, 299.0], "precip_mm": [0.0, 0.0, 5.0, 1.0], "y": [0, 1, 0, 1]})
     model = LogisticRegression().fit(train[FEATURES], train["y"])
     bundle = ModelBundle(
         model=model,
         feature_columns=FEATURES,
+        calibrator=calibrator,
         metadata={"model_type": "LogisticRegression", "val_scores": {"pr_auc": 0.5}},
     )
     model_path = tmp_path / "model.joblib"
@@ -49,7 +49,30 @@ def client(tmp_path, monkeypatch):
 
     importlib.reload(main_module)
 
-    with TestClient(main_module.app) as test_client:
+    return TestClient(main_module.app)
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    # small, self-contained model + dataset so the API doesn't depend on the
+    # real multi-GB pipeline output being present when tests run
+    with _build_client(tmp_path, monkeypatch) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def calibrated_client(tmp_path, monkeypatch):
+    # Same as `client`, but the bundle carries a real IsotonicRegression calibrator, so the
+    # `calibrated_probability`/`calibrated_risk_probability` response fields have a case where
+    # they're actually populated, not just `None` — the `client` fixture above already covers the
+    # no-calibrator/`None` branch.
+    raw_scores = np.linspace(0.0, 1.0, 50)
+    true_rate = raw_scores / 10
+    rng = np.random.default_rng(0)
+    y_true = (rng.uniform(0, 1, size=50) < true_rate).astype(int)
+    calibrator = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip").fit(raw_scores, y_true)
+
+    with _build_client(tmp_path, monkeypatch, calibrator=calibrator) as test_client:
         yield test_client
 
 
@@ -60,13 +83,29 @@ def test_health_reports_loaded_model_metadata(client):
     assert body["status"] == "ok"
     assert body["model_type"] == "LogisticRegression"
     assert set(body["feature_columns"]) == set(FEATURES)
+    assert body["calibrated"] is False
+
+
+def test_health_reports_calibrated_true_when_a_calibrator_is_attached(calibrated_client):
+    response = calibrated_client.get("/health")
+    assert response.json()["calibrated"] is True
 
 
 def test_predict_returns_a_probability_for_valid_features(client):
     response = client.post("/predict", json={"t2m": 300.0, "precip_mm": 0.0})
     assert response.status_code == 200
-    prob = response.json()["ignition_probability"]
+    body = response.json()
+    prob = body["ignition_probability"]
     assert 0.0 <= prob <= 1.0
+    assert body["calibrated_probability"] is None
+
+
+def test_predict_returns_a_calibrated_probability_when_a_calibrator_is_attached(calibrated_client):
+    response = calibrated_client.post("/predict", json={"t2m": 300.0, "precip_mm": 0.0})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["calibrated_probability"] is not None
+    assert 0.0 <= body["calibrated_probability"] <= 1.0
 
 
 def test_predict_rejects_missing_feature(client):
@@ -88,6 +127,22 @@ def test_predict_live_returns_a_probability_for_a_valid_cell(client, monkeypatch
     assert body["cell_id"] == A_REAL_CELL_ID
     assert body["date"] == "2024-07-15"
     assert 0.0 <= body["ignition_probability"] <= 1.0
+    assert body["calibrated_probability"] is None
+
+
+def test_predict_live_returns_a_calibrated_probability_when_a_calibrator_is_attached(calibrated_client, monkeypatch):
+    import api.main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "build_live_feature_row",
+        lambda latitude, longitude, target_date, cell_id: {"t2m": 300.0, "precip_mm": 0.0},
+    )
+    response = calibrated_client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["calibrated_probability"] is not None
+    assert 0.0 <= body["calibrated_probability"] <= 1.0
 
 
 def test_predict_live_404s_for_an_unknown_cell(client):
@@ -137,7 +192,17 @@ def test_risk_map_returns_cells_with_coordinates_for_a_known_date(client):
     cell = next(r for r in rows if r["cell_id"] == "1124_-1696")
     assert cell["actual_ignited"] == 1
     assert 0.0 <= cell["risk_probability"] <= 1.0
+    assert cell["calibrated_risk_probability"] is None
     assert cell["latitude"] is not None
+
+
+def test_risk_map_returns_calibrated_probabilities_when_a_calibrator_is_attached(calibrated_client):
+    response = calibrated_client.get("/risk-map", params={"date": "2021-08-04"})
+    assert response.status_code == 200
+    rows = response.json()
+    for row in rows:
+        assert row["calibrated_risk_probability"] is not None
+        assert 0.0 <= row["calibrated_risk_probability"] <= 1.0
 
 
 def test_risk_map_404s_for_a_date_with_no_data(client):

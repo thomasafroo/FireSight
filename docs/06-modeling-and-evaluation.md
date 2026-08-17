@@ -826,7 +826,13 @@ truth in a single held-out year.
 than the raw score — it cuts the worst-case absolute miscalibration by roughly 50x — but it is not
 "solved calibration." Its own accuracy is still meaningfully year-dependent, particularly for low-fire
 years, in a way this single leave-one-year-out check can't fully rule out getting worse on a future year
-unlike any of the 8 tested. **Not promoted to the served model in this investigation** (deliberately kept
-evaluation-only — see [README.md](../README.md)): `ignition_probability` should still be read primarily
-as a relative-risk signal, with pooled calibration as a documented, evidence-backed next step if/when a
-calibrated absolute number is actually needed, not a change made automatically because it was measured.
+unlike any of the 8 tested.
+
+**Promoted to the served model**, on that basis: `training/export_model.py::export_current_best` now
+fits this same pooled isotonic calibrator (all 8 years combined, not held-one-out — the LOYO split
+above exists to validate the method, not to leave a year out of the production fit) and attaches it to
+the `ModelBundle`, exposed via `/predict`'s and `/predict/live`'s `calibrated_probability` and
+`/risk-map`'s `calibrated_risk_probability` (see [Serving](07-serving.md#calibration-ignition_probability-vs-calibrated_probability)).
+`ignition_probability`/`risk_probability` are unchanged and still the field to use for ranking — the
+calibrator only rescales magnitude, and the caveat above (particularly unreliable in low-fire years)
+still applies to the calibrated number, so treat it as a much-improved estimate, not an exact one.

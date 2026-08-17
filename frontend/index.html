@@ -395,11 +395,14 @@
     markersByCellId[nearest.cell_id]?.openTooltip();
 
     const riskPct = (nearest.risk_probability * 100).toFixed(3);
+    const calibratedNote = nearest.calibrated_risk_probability != null
+      ? ` (calibrated ~${(nearest.calibrated_risk_probability * 100).toFixed(3)}%)`
+      : "";
     const fireNote = nearest.actual_ignited ? " — fire detected here that day" : "";
     const outsideNote = nearestKm > OUTSIDE_GRID_KM
       ? ` (nearest modeled cell is ~${nearestKm.toFixed(0)}km away — outside the fitted grid)`
       : "";
-    cityStatusEl.textContent = `${city.name}: ${riskPct}% risk${fireNote}${outsideNote}`;
+    cityStatusEl.textContent = `${city.name}: ${riskPct}% risk${calibratedNote}${fireNote}${outsideNote}`;
   }
 
   // goToCity is the exact-match fallback: what runs when Enter/Go is pressed with no
@@ -563,6 +566,9 @@
         fillOpacity: 0.85,
       }).bindTooltip(
         `cell ${row.cell_id}<br>risk: ${(row.risk_probability * 100).toFixed(3)}%` +
+        (row.calibrated_risk_probability != null
+          ? `<br>calibrated: ~${(row.calibrated_risk_probability * 100).toFixed(3)}%`
+          : "") +
         (row.actual_ignited ? "<br><strong>fire detected here</strong>" : "")
       );
       marker.addTo(map);
