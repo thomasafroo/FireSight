@@ -64,12 +64,17 @@ year](docs/06-modeling-and-evaluation.md#why-performance-swings-by-month-and-yea
 **Open, not-yet-decided next steps:**
 
 - Adding a neural network (see `research/neural-networks.md` for a feasibility writeup)
-- Recalibrating `ignition_probability` (e.g. `CalibratedClassifierCV`) so the raw number means what
-  it looks like it means, not just ranks correctly — checked and deliberately **not** started yet: the
-  per-year miscalibration factor is itself unstable (17x-490x depending on the holdout year), so a
-  calibrator fit today risks the same single-scenario overfitting problem the backtest just caught for
-  the ranking metrics. Needs pooling many years (not just the high-fire, low-noise ones) before fitting,
-  and its own per-year stability check after
+- Promoting a calibrated `ignition_probability` to the served model — investigated, not yet promoted.
+  `evaluation/calibration.py::leave_one_year_out_calibration_check` pooled 7 years of predictions to
+  calibrate the 8th (isotonic and sigmoid both tested), the way the per-year-instability finding above
+  said it needed to be checked. Result: a real, substantial improvement (worst-case top-decile
+  miscalibration drops from ~2,673x to ~51x) but not a solved problem — the *relative* spread between
+  the best- and worst-calibrated held-out year barely changes (~89x before pooling, ~95x after), and the
+  years that stay worst-calibrated are exactly the sparsest-fire years, where the true observed rate
+  itself is a noisy estimate from a handful of fires. See [Does pooled calibration actually
+  help?](docs/06-modeling-and-evaluation.md#does-pooled-leave-one-year-out-validated-calibration-actually-help)
+  for the full table. Kept evaluation-only rather than wired into serving, so this stays a next step
+  to make deliberately, not evidence acted on automatically because it was measured
 
 ## Project layout
 

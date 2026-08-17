@@ -1,6 +1,10 @@
 import numpy as np
 
-from firesight.evaluation.calibration import reliability_table
+from firesight.evaluation.calibration import (
+    fit_isotonic_calibrator,
+    leave_one_year_out_calibration_check,
+    reliability_table,
+)
 from firesight.evaluation.metrics import brier_score
 
 
@@ -40,3 +44,54 @@ def test_reliability_table_flags_a_systematically_overconfident_model():
 
     top_bin = table.iloc[-1]
     assert top_bin["mean_predicted"] > top_bin["observed_rate"] * 3
+
+
+def test_fit_isotonic_calibrator_recovers_a_known_overconfident_scaling():
+    rng = np.random.default_rng(0)
+    n = 5000
+    y_score = rng.uniform(0, 1, size=n)
+    true_rate = y_score / 10  # same overconfident-by-10x pattern as the reliability_table test above
+    y_true = (rng.uniform(0, 1, size=n) < true_rate).astype(int)
+
+    calibrator = fit_isotonic_calibrator(y_score, y_true)
+    calibrated = calibrator.predict(y_score)
+
+    raw_error = np.abs(y_score - true_rate).mean()
+    calibrated_error = np.abs(calibrated - true_rate).mean()
+    assert calibrated_error < raw_error / 3
+
+
+def test_leave_one_year_out_calibration_check_improves_brier_when_miscalibration_is_consistent_across_years():
+    rng = np.random.default_rng(1)
+    fold_scores = {}
+    for year in range(2017, 2022):
+        n = 3000
+        y_score = rng.uniform(0, 1, size=n)
+        true_rate = y_score / 10  # same overconfidence factor every year
+        y_true = (rng.uniform(0, 1, size=n) < true_rate).astype(int)
+        fold_scores[year] = (y_true, y_score)
+
+    result = leave_one_year_out_calibration_check(fold_scores)
+
+    assert set(result["year"]) == set(fold_scores.keys())
+    assert (result["isotonic_brier"] < result["raw_brier"]).all()
+
+
+def test_leave_one_year_out_calibration_check_can_make_an_already_calibrated_year_worse():
+    rng = np.random.default_rng(2)
+    n = 4000
+    # 2017-2019 are all overconfident by the same 50x factor; 2020's raw score is already the
+    # true rate. Pooling "the other years" to calibrate 2020 pools in three years whose own
+    # correction doesn't apply to it -- calibration isn't a free lunch just because it helped
+    # everywhere else.
+    factors = {2017: 50, 2018: 50, 2019: 50, 2020: 1}
+    fold_scores = {}
+    for year, factor in factors.items():
+        y_score = rng.uniform(0, 1, size=n)
+        true_rate = np.clip(y_score / factor, 0, 1)
+        y_true = (rng.uniform(0, 1, size=n) < true_rate).astype(int)
+        fold_scores[year] = (y_true, y_score)
+
+    result = leave_one_year_out_calibration_check(fold_scores).set_index("year")
+
+    assert result.loc[2020, "isotonic_brier"] > result.loc[2020, "raw_brier"]

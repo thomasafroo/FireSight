@@ -774,3 +774,59 @@ observed-vs-predicted data across many years (not just the high-confidence ones)
 validate the resulting calibrator's stability across individual holdout years the same way this table
 does — a calibrator that only gets checked in aggregate could hide the exact same year-to-year
 instability the aggregate `ignition_probability` numbers already did.
+
+### Does pooled, leave-one-year-out-validated calibration actually help?
+
+`evaluation/calibration.py::leave_one_year_out_calibration_check` does exactly what the recommendation
+above asks for: for each of the 8 rolling-origin years, fit a calibrator on every *other* year's pooled
+`(y_score, y_true)` pairs, apply it to the held-out year, and compare against doing nothing — the honest
+test of whether pooling generalizes to a year it never saw, not whether it fits the years it was trained
+on. Two calibration methods are compared: isotonic regression (a flexible monotonic curve) and sigmoid/
+Platt scaling (a single logistic curve) — see `fit_isotonic_calibrator`/`fit_sigmoid_calibrator`.
+
+| year | positives | pooled calibration-fit positives | raw Brier | isotonic Brier | sigmoid Brier | raw top-decile ratio | isotonic top-decile ratio | sigmoid top-decile ratio |
+|---|---|---|---|---|---|---|---|---|
+| 2017 | 1,433 | 4,099 | 0.2056 | 0.0059 | 0.0059 | 47.3x | 0.67x | 0.87x |
+| 2018 | 229 | 5,303 | 0.0900 | 0.0010 | 0.0010 | 332.3x | 6.0x | 6.0x |
+| 2019 | 57 | 5,475 | 0.0506 | 0.0002 | 0.0002 | 1,090.8x | 15.7x | 14.2x |
+| 2020 | 43 | 5,489 | 0.0868 | 0.0002 | 0.0002 | 2,673.4x | 45.9x | 46.2x |
+| 2021 | 2,628 | 2,904 | 0.1826 | 0.0107 | 0.0107 | 30.3x | 0.54x | 0.37x |
+| 2022 | 98 | 5,434 | 0.1388 | 0.0004 | 0.0004 | 2,589.7x | 51.1x | 59.9x |
+| 2023 | 802 | 4,730 | 0.1233 | 0.0033 | 0.0033 | 61.6x | 1.27x | 1.25x |
+| 2024 | 242 | 5,290 | 0.1048 | 0.0010 | 0.0010 | 109.6x | 1.96x | 2.08x |
+
+(top-decile ratio = mean predicted / observed rate in the top-scored bucket, matching the table above —
+1.0x is perfect; both above and below 1.0x are miscalibrated.)
+
+**Pooled calibration is a real, substantial improvement — but it doesn't solve the underlying
+instability, it just moves the whole cluster of numbers much closer to correct.** Two separate results,
+not one:
+
+1. **Brier score improves by 15–500x in every single year**, isotonic and sigmoid performing almost
+   identically throughout (no meaningful reason to prefer one over the other here). This is largely
+   mechanical, not a deep achievement: Brier score is dominated by the huge majority of true-negative
+   rows, and *any* calibration that shrinks scores toward the true ~0.1–0.3% base rate collapses their
+   squared error, almost regardless of whether the shrinkage is precisely right for that specific year.
+2. **The top-decile ratio — the number that actually answers "is a highly-scored cell's probability
+   meaningful" — improves in absolute terms in every year (worst case 2,673x → 51x) but the *relative
+   spread between the best- and worst-calibrated held-out year barely changes*: ~89x (2,673/30 raw) vs.
+   ~95x (51/0.54 isotonic).** Pooling shifts every year's number much closer to 1.0x, but it doesn't make
+   the years agree with each other any better than before — the year-to-year instability this whole
+   investigation set out to check for is still there, just rescaled to a smaller absolute range.
+
+**The years that stay worst-calibrated after pooling are exactly the sparsest-fire years** (2018's 229,
+2019's 57, 2020's 43, 2022's 98 positives — still 6x–51x off), while the years with the most fires to
+estimate a top-decile rate from land closest to 1.0x (2017 sigmoid: 0.87x, 2021 isotonic: 0.54x, 2023
+isotonic: 1.27x). This matches the same statistical-noise explanation already given above for the raw
+numbers: a sparse year's *observed* top-decile rate is itself being estimated from a handful of real
+fires, so no calibrator — however well pooled — can be checked precisely against that little ground
+truth in a single held-out year.
+
+**Revised practical recommendation:** a pooled calibrator is worth having as a materially better default
+than the raw score — it cuts the worst-case absolute miscalibration by roughly 50x — but it is not
+"solved calibration." Its own accuracy is still meaningfully year-dependent, particularly for low-fire
+years, in a way this single leave-one-year-out check can't fully rule out getting worse on a future year
+unlike any of the 8 tested. **Not promoted to the served model in this investigation** (deliberately kept
+evaluation-only — see [README.md](../README.md)): `ignition_probability` should still be read primarily
+as a relative-risk signal, with pooled calibration as a documented, evidence-backed next step if/when a
+calibrated absolute number is actually needed, not a change made automatically because it was measured.

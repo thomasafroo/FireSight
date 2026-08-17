@@ -20,6 +20,7 @@ Re-running `RandomizedSearchCV` 8x would also revisit the `n_jobs=-1` hang risk 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -78,31 +79,66 @@ def monthly_capture_breakdown(dates: pd.Series, y_true: np.ndarray, y_score: np.
     return table
 
 
+@dataclass
+class BacktestFold:
+    """One rolling-origin fold's raw predictions, kept around for reuse beyond this script's own
+    printing — e.g. `evaluation/calibration.py` pools `y_true`/`y_score` across every fold's
+    `year` to fit and validate a calibrator, without re-running the (expensive) per-fold refit.
+    """
+
+    year: int
+    train_rows: int
+    y_true: np.ndarray
+    y_score: np.ndarray
+    dates: pd.Series
+    scores: dict[str, float]
+
+
+def run_rolling_origin_backtest(
+    df: pd.DataFrame, holdout_years: list[int] = HOLDOUT_YEARS
+) -> list[BacktestFold]:
+    """Refit `BEST_RANDOM_FOREST_PARAMS` per fold and score each holdout year, returning the raw
+    predictions rather than printing them — the reusable core this module's own `__main__` and
+    `calibration.py`'s pooled-calibration check both build on.
+    """
+    from firesight.training.advanced_models import fit_random_forest
+    from firesight.training.baseline import FEATURE_COLUMNS, score_model
+    from firesight.training.export_model import BEST_RANDOM_FOREST_PARAMS
+
+    folds = []
+    for year, train, holdout in rolling_origin_folds(df, holdout_years):
+        model = fit_random_forest(train, **BEST_RANDOM_FOREST_PARAMS)
+        scores = score_model(model, holdout)
+        y_true = holdout[LABEL_COLUMN].to_numpy()
+        y_score = model.predict_proba(holdout[FEATURE_COLUMNS])[:, 1]
+        folds.append(
+            BacktestFold(
+                year=year,
+                train_rows=len(train),
+                y_true=y_true,
+                y_score=y_score,
+                dates=holdout[DATE_COLUMN],
+                scores=scores,
+            )
+        )
+    return folds
+
+
 if __name__ == "__main__":
     from firesight.evaluation.calibration import reliability_table
     from firesight.evaluation.metrics import brier_score
-    from firesight.training.advanced_models import fit_random_forest
-    from firesight.training.baseline import (
-        DATASET_PATH,
-        FEATURE_COLUMNS,
-        filter_fire_season,
-        score_model,
-    )
-    from firesight.training.export_model import BEST_RANDOM_FOREST_PARAMS
+    from firesight.training.baseline import DATASET_PATH, filter_fire_season
 
     df = pd.read_parquet(DATASET_PATH)
     df = filter_fire_season(df)
 
     results = []
     monthly_tables = []
-    for year, train, holdout in rolling_origin_folds(df, HOLDOUT_YEARS):
-        positives = int(holdout[LABEL_COLUMN].sum())
-        print(f"\n--- holdout {year}: train={len(train):,} rows, holdout positives={positives} ---", flush=True)
-        model = fit_random_forest(train, **BEST_RANDOM_FOREST_PARAMS)
-        scores = score_model(model, holdout)
+    for fold in run_rolling_origin_backtest(df, HOLDOUT_YEARS):
+        year, y_true, y_score = fold.year, fold.y_true, fold.y_score
+        positives = int(y_true.sum())
+        print(f"\n--- holdout {year}: train={fold.train_rows:,} rows, holdout positives={positives} ---", flush=True)
 
-        y_true = holdout[LABEL_COLUMN].to_numpy()
-        y_score = model.predict_proba(holdout[FEATURE_COLUMNS])[:, 1]
         base_rate = float(y_true.mean())
         bs = brier_score(y_true, y_score)
         floor = base_rate * (1 - base_rate)
@@ -111,11 +147,11 @@ if __name__ == "__main__":
         top_bin_observed = float(top_bin["observed_rate"])
         top_bin_ratio = float(top_bin["mean_predicted"] / top_bin_observed) if top_bin_observed > 0 else float("nan")
 
-        print(f"holdout {year}: {scores}", flush=True)
+        print(f"holdout {year}: {fold.scores}", flush=True)
         print(f"holdout {year}: brier={bs:.6f} floor={floor:.6f} ratio={bs / floor:.1f}x", flush=True)
         print(table.to_string(index=False), flush=True)
 
-        monthly = monthly_capture_breakdown(holdout[DATE_COLUMN], y_true, y_score)
+        monthly = monthly_capture_breakdown(fold.dates, y_true, y_score)
         monthly.insert(0, "year", year)
         print(monthly.to_string(index=False), flush=True)
         jul_aug = monthly[monthly["month"].isin([7, 8])]
@@ -124,9 +160,9 @@ if __name__ == "__main__":
         results.append(
             {
                 "year": year,
-                "train_rows": len(train),
+                "train_rows": fold.train_rows,
                 "positives": positives,
-                **scores,
+                **fold.scores,
                 "brier": bs,
                 "brier_floor": floor,
                 "brier_ratio": bs / floor,

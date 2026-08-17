@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 
 
 def reliability_table(y_true: np.ndarray, y_score: np.ndarray, n_bins: int = 10) -> pd.DataFrame:
@@ -47,6 +49,80 @@ def reliability_table(y_true: np.ndarray, y_score: np.ndarray, n_bins: int = 10)
     )
 
 
+def fit_isotonic_calibrator(y_score: np.ndarray, y_true: np.ndarray) -> IsotonicRegression:
+    """Fit a monotonic score -> true-frequency mapping directly on (score, outcome) pairs.
+
+    Deliberately fit on raw pooled rows, not `CalibratedClassifierCV` — that class exists to
+    wrap an estimator and manage its own internal cross-validation split, but
+    `backtest.py::run_rolling_origin_backtest` already gives independently-trained, honest
+    out-of-sample scores per year, so there's no CV split left for it to add. `y_min`/`y_max`
+    clamp the fitted curve to a valid probability range; `out_of_bounds="clip"` extends the
+    curve's endpoints rather than returning NaN for a score outside the fitted range (this
+    module's raw scores can differ slightly year to year since a fresh model is refit per fold).
+    """
+    return IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip").fit(y_score, y_true)
+
+
+def fit_sigmoid_calibrator(y_score: np.ndarray, y_true: np.ndarray) -> LogisticRegression:
+    """Platt scaling: fit a 1-D logistic curve from raw score -> true frequency.
+
+    Needs far fewer samples than `fit_isotonic_calibrator` to avoid overfitting (a straight
+    sigmoid has 2 parameters vs. isotonic's one step per unique score), at the cost of assuming
+    the miscalibration really is S-shaped rather than fitting whatever shape the data shows.
+    """
+    return LogisticRegression().fit(y_score.reshape(-1, 1), y_true)
+
+
+def apply_sigmoid_calibrator(calibrator: LogisticRegression, y_score: np.ndarray) -> np.ndarray:
+    return calibrator.predict_proba(y_score.reshape(-1, 1))[:, 1]
+
+
+def leave_one_year_out_calibration_check(fold_scores: dict[int, tuple[np.ndarray, np.ndarray]]) -> pd.DataFrame:
+    """For each year, calibrate on every *other* year pooled together, then score the held-out
+    year — the honest test of "does a pooled calibrator generalize to a year it never saw,"
+    not "does it fit the years it was trained on." `fold_scores` is `{year: (y_true, y_score)}`,
+    e.g. built from `backtest.py::run_rolling_origin_backtest`'s per-fold results.
+
+    Reports Brier score (whole-year fit) and the top-decile reliability ratio (mean_predicted /
+    observed_rate — 1.0 is perfect, matching docs/06's existing per-year calibration table) both
+    before and after each calibration method, so a pooled calibrator that merely shrinks the
+    aggregate Brier number without fixing the top-decile — the bucket `/risk-map` and
+    `top_10pct_capture` actually rely on — doesn't get mistaken for a real fix.
+    """
+    from firesight.evaluation.metrics import brier_score
+
+    def top_bin_ratio(y_true: np.ndarray, y_score: np.ndarray) -> float:
+        table = reliability_table(y_true, y_score, n_bins=10)
+        top_bin = table.iloc[-1]
+        observed = float(top_bin["observed_rate"])
+        return float(top_bin["mean_predicted"] / observed) if observed > 0 else float("nan")
+
+    rows = []
+    for year, (y_true, y_score) in fold_scores.items():
+        other_true = np.concatenate([yt for y, (yt, _ys) in fold_scores.items() if y != year])
+        other_score = np.concatenate([ys for y, (_yt, ys) in fold_scores.items() if y != year])
+
+        iso = fit_isotonic_calibrator(other_score, other_true)
+        sig = fit_sigmoid_calibrator(other_score, other_true)
+        iso_score = iso.predict(y_score)
+        sig_score = apply_sigmoid_calibrator(sig, y_score)
+
+        rows.append(
+            {
+                "year": year,
+                "positives": int(y_true.sum()),
+                "pooled_train_positives": int(other_true.sum()),
+                "raw_brier": brier_score(y_true, y_score),
+                "isotonic_brier": brier_score(y_true, iso_score),
+                "sigmoid_brier": brier_score(y_true, sig_score),
+                "raw_top_bin_ratio": top_bin_ratio(y_true, y_score),
+                "isotonic_top_bin_ratio": top_bin_ratio(y_true, iso_score),
+                "sigmoid_top_bin_ratio": top_bin_ratio(y_true, sig_score),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 if __name__ == "__main__":
     from firesight.evaluation.metrics import brier_score
     from firesight.training.baseline import (
@@ -72,3 +148,23 @@ if __name__ == "__main__":
         print(f"brier score: {brier_score(y_true, y_score):.6f}  (base-rate-only floor: {y_true.mean() * (1 - y_true.mean()):.6f})", flush=True)
         print(f"observed positive rate: {y_true.mean():.6f}", flush=True)
         print(reliability_table(y_true, y_score).to_string(index=False), flush=True)
+
+    # Pooled, leave-one-year-out calibration check: refits BEST_RANDOM_FOREST_PARAMS across the
+    # same 8 rolling-origin folds backtest.py uses (not the single served bundle above, which is
+    # scored on val/test only), so a calibrator can be fit and validated across many years rather
+    # than one — see docs/06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-real-probability
+    # for why a single-year fit was rejected.
+    from firesight.evaluation.backtest import HOLDOUT_YEARS, run_rolling_origin_backtest
+
+    print("\n=== pooled, leave-one-year-out calibration check ===", flush=True)
+    folds = run_rolling_origin_backtest(df, HOLDOUT_YEARS)
+    fold_scores = {fold.year: (fold.y_true, fold.y_score) for fold in folds}
+    loyo = leave_one_year_out_calibration_check(fold_scores)
+    print(loyo.to_string(index=False), flush=True)
+
+    print("\n=== reference: one calibrator fit on all 8 years pooled together ===", flush=True)
+    print("(printed only, not persisted or wired into the served model)", flush=True)
+    all_true = np.concatenate([yt for yt, _ys in fold_scores.values()])
+    all_score = np.concatenate([ys for _yt, ys in fold_scores.values()])
+    pooled_iso = fit_isotonic_calibrator(all_score, all_true)
+    print(reliability_table(all_true, pooled_iso.predict(all_score)).to_string(index=False), flush=True)
