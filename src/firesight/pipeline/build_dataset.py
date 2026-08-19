@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from firesight.features.convective import load_convective_daily
 from firesight.features.engineering import drop_incomplete_history, engineer_features
 from firesight.features.grid import assign_cell_ids, build_grid_cells
 from firesight.features.labels import build_label_scaffold, filter_real_fires
@@ -20,6 +21,7 @@ from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
 
 FIRMS_PATH = Path("data/raw/firms/kamloops_2012-2024.parquet")
 ERA5_DIR = Path("data/raw/era5")
+ERA5_CONVECTIVE_DIR = Path("data/raw/era5_convective")
 OUT_PATH = Path("data/processed/kamloops_dataset.parquet")
 
 START_DATE = "2012-01-01"
@@ -30,6 +32,7 @@ CELL_SIZE_KM = 5.0
 def build(
     firms_path: Path = FIRMS_PATH,
     era5_dir: Path = ERA5_DIR,
+    era5_convective_dir: Path = ERA5_CONVECTIVE_DIR,
     start_date: str = START_DATE,
     end_date: str = END_DATE,
     cell_size_km: float = CELL_SIZE_KM,
@@ -43,8 +46,12 @@ def build(
 
     era5_paths = sorted(era5_dir.glob("*.nc"))
     era5_daily = load_era5_daily(era5_paths)
-
     joined = join_weather(scaffold, grid_cells, era5_daily)
+
+    convective_paths = sorted(era5_convective_dir.glob("*.nc"))
+    convective_daily = load_convective_daily(convective_paths)
+    joined = join_weather(joined, grid_cells, convective_daily)
+
     engineered = engineer_features(joined)
     return drop_incomplete_history(engineered)
 

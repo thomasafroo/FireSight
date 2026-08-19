@@ -99,7 +99,46 @@ def test_engineer_features_end_to_end_and_drop_incomplete_history():
     for col in ["days_since_rain", "precip_7d", "precip_30d", "wind_speed", "relative_humidity"]:
         assert col in engineered.columns
 
-    complete = drop_incomplete_history(engineered)
+    # cape/convective_precip_mm are joined in by build_dataset.py, not produced by
+    # engineer_features itself, so this synthetic frame (which only exercises engineer_features
+    # in isolation) checks completeness against the columns engineer_features actually adds.
+    weather_derived_columns = [
+        "days_since_rain",
+        "precip_7d",
+        "precip_30d",
+        "wind_speed",
+        "wind_dir_sin",
+        "wind_dir_cos",
+        "relative_humidity",
+        "t2m_mean_7d",
+        "t2m_trend_7d",
+        "rh_mean_7d",
+    ]
+    complete = drop_incomplete_history(engineered, columns=weather_derived_columns)
     # first 29 rows lack a full 30-day window -> dropped
     assert len(complete) == n - 29
-    assert complete.isna().sum().sum() == 0
+    assert complete[weather_derived_columns].isna().sum().sum() == 0
+
+
+def test_drop_incomplete_history_defaults_also_enforce_cape_completeness():
+    # cape/convective_precip_mm are joined in (build_dataset.py), not engineered here, but
+    # drop_incomplete_history's *default* column list should still enforce completeness on them
+    # the same way it does for every other feature.
+    df = pd.DataFrame(
+        {
+            "days_since_rain": [1.0, 2.0],
+            "precip_7d": [1.0, 2.0],
+            "precip_30d": [1.0, 2.0],
+            "wind_speed": [1.0, 2.0],
+            "wind_dir_sin": [1.0, 2.0],
+            "wind_dir_cos": [1.0, 2.0],
+            "relative_humidity": [1.0, 2.0],
+            "t2m_mean_7d": [1.0, 2.0],
+            "t2m_trend_7d": [1.0, 2.0],
+            "rh_mean_7d": [1.0, 2.0],
+            "cape": [100.0, np.nan],
+            "convective_precip_mm": [0.0, 0.0],
+        }
+    )
+    complete = drop_incomplete_history(df)
+    assert len(complete) == 1

@@ -110,3 +110,47 @@ nothing about trends, recent dryness, or wind direction yet. That's deliberately
 [Feature engineering](05-feature-engineering.md), a separate step, since raw daily weather and the
 time-series-derived features built from it are different concerns worth being able to reason about
 (and test) independently.
+
+## A second weather source: full ERA5's CAPE and convective precipitation
+
+The [known winter/shoulder-season blind spot](06-modeling-and-evaluation.md#known-limitation-a-wintershoulder-season-blind-spot)
+traced most fire-season misses to a real cause, not a modeling gap: BC Wildfire Service's own
+incident records show fire-season fires are 59.5% lightning-caused, but there's no per-cell/per-day
+lightning-strike feature in this project to flag that risk day-by-day. A real lightning-detection
+feed (e.g. the Canadian Lightning Detection Network) doesn't have public historical coverage going
+back to 2012, so it can't backfill this project's training years. CAPE (convective available
+potential energy — how much energy is available for an updraft, the standard meteorological proxy
+for storm/lightning potential) does have that history, and comes from the same ECMWF reanalysis
+family already used for `t2m`/`swvl1`/etc., just at full ERA5's coarser ~0.25° grid rather than
+ERA5-Land's ~0.1° (ERA5-Land doesn't carry CAPE at all). `features/convective.py`/
+`pipeline/ingest_era5_convective.py` fetch and join `cape` and `cp` (convective precipitation, kept
+alongside CAPE since it's fetched in the same request at no extra cost, and is a second, related
+storm-intensity signal) the same way — see [Feature engineering](05-feature-engineering.md) for how
+they're engineered. Added to `training/baseline.py::FEATURE_COLUMNS` and re-tuned 2026-08-17, but not
+promoted to the served model — the re-tune showed no measured benefit on the untouched 2024 test set,
+see [Modeling &
+evaluation](06-modeling-and-evaluation.md#the-re-tune-result-2026-08-17-overnight-run-no-measured-benefit)
+for the actual numbers and the reasoning for keeping the prior 10-feature model in production.
+`features/convective.py::load_convective_daily` reuses `weather.py`'s
+generic `nearest_era5_lookup`/`join_weather` unchanged — both already operate on any
+`(latitude, longitude, date, ...)`-shaped frame, so a second, differently-gridded source doesn't need
+its own join logic, only its own loading.
+
+**Loading it required verifying a second accumulation-convention assumption, the same way `tp` did
+above — and this one turned out to be the opposite convention.** `cp` in full ERA5's
+`reanalysis-era5-single-levels` product is **not** a running accumulation since 00 UTC the way
+ERA5-Land's `tp` is — verified directly against a real CDS response, not assumed, given the `tp` bug
+above was exactly this kind of mistake. Each hourly `cp` sample is its own independent,
+already-deaccumulated value, so the daily total is a plain sum of the day's hourly values, no
+shift-and-diff trick needed. That's also why the ingestion fetches hourly (not ERA5-Land's 6-hourly)
+resolution: 6-hourly sampling of an already-deaccumulated variable would silently capture only 1 of
+every 6 hours' rain, undercounting the same way summing `tp`'s cumulative samples once overcounted
+it. `cape` is fetched at the same hourly cadence — it's the same request at no extra cost — so its
+daily aggregate (`max`, not `mean`: peak instability is the meteorologically relevant number for
+storm potential, not an average that washes out an afternoon spike) isn't undersampled either.
+
+Requesting an instantaneous variable (`cape`) and an accumulated one (`cp`) together also makes CDS
+return two separate NetCDF files inside one zip (split by GRIB `stepType`), unlike ERA5-Land's single
+combined-file response — `ingest_era5_convective.py::_merge_zipped_response` merges them back into
+one file per month so `load_convective_daily` sees the same "one NetCDF per month" shape
+`load_era5_daily` already produces.

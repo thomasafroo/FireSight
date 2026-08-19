@@ -1,0 +1,45 @@
+
+--- randomized search: XGBoost (GPU, randomized search) (15 sampled candidates) ---
+C:\Users\tomis\Documents\FireSight\.venv\Lib\site-packages\xgboost\core.py:569: UserWarning: [03:39:12] WARNING: C:\actions-runner\_work\xgboost\xgboost\src\common\error_msg.cc:62: Falling back to prediction using DMatrix due to mismatched devices. This might lead to higher memory usage and slower performance. XGBoost is running on: cuda:0, while the input data is on: cpu.
+Potential solutions:
+- Use a data structure that matches the device ordinal in the booster.
+- Set the device for booster before call to inplace_predict.
+
+This warning will only be shown once.
+
+  return func(**kwargs)
+Fitting 1 folds for each of 15 candidates, totalling 15 fits
+[CV 1/1] END colsample_bytree=0.8195254015709299, learning_rate=0.11387317092169064, max_depth=6, n_estimators=351, reg_alpha=0.0431171005868549, reg_lambda=0.18662266976517972, subsample=0.8583576452266624;, score=0.013 total time=   4.3s
+[CV 1/1] END colsample_bytree=0.775034884505077, learning_rate=0.20761410420015303, max_depth=3, n_estimators=496, reg_alpha=0.014135935551752304, reg_lambda=2.372330072992194, subsample=0.8115579679011617;, score=0.012 total time=   3.4s
+[CV 1/1] END colsample_bytree=0.827217824437573, learning_rate=0.2329262676497442, max_depth=3, n_estimators=365, reg_alpha=0.088006675613855, reg_lambda=0.12726958252506765, subsample=0.9828620635812185;, score=0.012 total time=   2.6s
+[CV 1/1] END colsample_bytree=0.6561403121650581, learning_rate=0.19285210463871363, max_depth=6, n_estimators=277, reg_alpha=0.024234724484675927, reg_lambda=2.195773446539456, subsample=0.6473097703475733;, score=0.010 total time=   2.8s
+[CV 1/1] END colsample_bytree=0.8559684085310095, learning_rate=0.01628359108363256, max_depth=3, n_estimators=131, reg_alpha=0.002078369792133813, reg_lambda=0.2635125223136193, subsample=0.674532937330704;, score=0.012 total time=   1.3s
+[CV 1/1] END colsample_bytree=0.8947672708515833, learning_rate=0.020886762632855514, max_depth=3, n_estimators=228, reg_alpha=0.009384756816024655, reg_lambda=0.028120601211200746, subsample=0.688928555300635;, score=0.013 total time=   1.9s
+[CV 1/1] END colsample_bytree=0.7545955924503448, learning_rate=0.21540084004755555, max_depth=5, n_estimators=131, reg_alpha=0.02046896396312667, reg_lambda=1.2384930898256403, subsample=0.624090188651708;, score=0.012 total time=   1.5s
+[CV 1/1] END colsample_bytree=0.8667066861782671, learning_rate=0.09786185674688934, max_depth=5, n_estimators=191, reg_alpha=0.17867279190412558, reg_lambda=0.6660272619360672, subsample=0.730018891603341;, score=0.012 total time=   1.9s
+[CV 1/1] END colsample_bytree=0.6153701705890938, learning_rate=0.08647681628389767, max_depth=7, n_estimators=147, reg_alpha=0.004232824558620119, reg_lambda=0.030473936177363888, subsample=0.8612433301861593;, score=0.013 total time=   2.0s
+[CV 1/1] END colsample_bytree=0.7013166410159128, learning_rate=0.04884246274247253, max_depth=6, n_estimators=379, reg_alpha=0.010328157319309916, reg_lambda=1.0574430003444462, subsample=0.7268806968277184;, score=0.013 total time=   3.7s
+[CV 1/1] END colsample_bytree=0.9113381928103637, learning_rate=0.2527153290697111, max_depth=3, n_estimators=469, reg_alpha=0.32646356775235214, reg_lambda=0.01942205696972693, subsample=0.9905837860053583;, score=0.012 total time=   3.1s
+[CV 1/1] END colsample_bytree=0.7874604806590806, learning_rate=0.27720085414897183, max_depth=4, n_estimators=483, reg_alpha=0.001310881325831351, reg_lambda=0.0705376339063223, subsample=0.6480786244852675;, score=0.011 total time=   3.7s
+[CV 1/1] END colsample_bytree=0.718456079008858, learning_rate=0.014975289856365856, max_depth=5, n_estimators=162, reg_alpha=0.017489966737814593, reg_lambda=0.015575517641504765, subsample=0.8769888477480079;, score=0.013 total time=   1.8s
+[CV 1/1] END colsample_bytree=0.8266405816826301, learning_rate=0.024661100772043927, max_depth=6, n_estimators=370, reg_alpha=0.0019134694478070977, reg_lambda=0.5343668232660405, subsample=0.9717184790304856;, score=0.013 total time=   3.6s
+[CV 1/1] END colsample_bytree=0.7274275809805295, learning_rate=0.09679346966037666, max_depth=6, n_estimators=180, reg_alpha=0.14092291316435565, reg_lambda=0.07382751981499336, subsample=0.6732765448028467;, score=0.012 total time=   2.0s
+                                                                                                                                                                                                                     params  mean_test_score
+{'colsample_bytree': 0.718456079008858, 'learning_rate': 0.014975289856365856, 'max_depth': 5, 'n_estimators': 162, 'reg_alpha': 0.017489966737814593, 'reg_lambda': 0.015575517641504765, 'subsample': 0.8769888477480079}         0.012881
+   {'colsample_bytree': 0.8195254015709299, 'learning_rate': 0.11387317092169064, 'max_depth': 6, 'n_estimators': 351, 'reg_alpha': 0.0431171005868549, 'reg_lambda': 0.18662266976517972, 'subsample': 0.8583576452266624}         0.012745
+  {'colsample_bytree': 0.7013166410159128, 'learning_rate': 0.04884246274247253, 'max_depth': 6, 'n_estimators': 379, 'reg_alpha': 0.010328157319309916, 'reg_lambda': 1.0574430003444462, 'subsample': 0.7268806968277184}         0.012724
+{'colsample_bytree': 0.8947672708515833, 'learning_rate': 0.020886762632855514, 'max_depth': 3, 'n_estimators': 228, 'reg_alpha': 0.009384756816024655, 'reg_lambda': 0.028120601211200746, 'subsample': 0.688928555300635}         0.012648
+{'colsample_bytree': 0.6153701705890938, 'learning_rate': 0.08647681628389767, 'max_depth': 7, 'n_estimators': 147, 'reg_alpha': 0.004232824558620119, 'reg_lambda': 0.030473936177363888, 'subsample': 0.8612433301861593}         0.012626
+{'colsample_bytree': 0.8266405816826301, 'learning_rate': 0.024661100772043927, 'max_depth': 6, 'n_estimators': 370, 'reg_alpha': 0.0019134694478070977, 'reg_lambda': 0.5343668232660405, 'subsample': 0.9717184790304856}         0.012553
+    {'colsample_bytree': 0.7545955924503448, 'learning_rate': 0.21540084004755555, 'max_depth': 5, 'n_estimators': 131, 'reg_alpha': 0.02046896396312667, 'reg_lambda': 1.2384930898256403, 'subsample': 0.624090188651708}         0.012479
+   {'colsample_bytree': 0.8559684085310095, 'learning_rate': 0.01628359108363256, 'max_depth': 3, 'n_estimators': 131, 'reg_alpha': 0.002078369792133813, 'reg_lambda': 0.2635125223136193, 'subsample': 0.674532937330704}         0.012314
+      {'colsample_bytree': 0.827217824437573, 'learning_rate': 0.2329262676497442, 'max_depth': 3, 'n_estimators': 365, 'reg_alpha': 0.088006675613855, 'reg_lambda': 0.12726958252506765, 'subsample': 0.9828620635812185}         0.012095
+    {'colsample_bytree': 0.8667066861782671, 'learning_rate': 0.09786185674688934, 'max_depth': 5, 'n_estimators': 191, 'reg_alpha': 0.17867279190412558, 'reg_lambda': 0.6660272619360672, 'subsample': 0.730018891603341}         0.011992
+    {'colsample_bytree': 0.775034884505077, 'learning_rate': 0.20761410420015303, 'max_depth': 3, 'n_estimators': 496, 'reg_alpha': 0.014135935551752304, 'reg_lambda': 2.372330072992194, 'subsample': 0.8115579679011617}         0.011983
+   {'colsample_bytree': 0.9113381928103637, 'learning_rate': 0.2527153290697111, 'max_depth': 3, 'n_estimators': 469, 'reg_alpha': 0.32646356775235214, 'reg_lambda': 0.01942205696972693, 'subsample': 0.9905837860053583}         0.011743
+  {'colsample_bytree': 0.7274275809805295, 'learning_rate': 0.09679346966037666, 'max_depth': 6, 'n_estimators': 180, 'reg_alpha': 0.14092291316435565, 'reg_lambda': 0.07382751981499336, 'subsample': 0.6732765448028467}         0.011521
+  {'colsample_bytree': 0.7874604806590806, 'learning_rate': 0.27720085414897183, 'max_depth': 4, 'n_estimators': 483, 'reg_alpha': 0.001310881325831351, 'reg_lambda': 0.0705376339063223, 'subsample': 0.6480786244852675}         0.011478
+   {'colsample_bytree': 0.6561403121650581, 'learning_rate': 0.19285210463871363, 'max_depth': 6, 'n_estimators': 277, 'reg_alpha': 0.024234724484675927, 'reg_lambda': 2.195773446539456, 'subsample': 0.6473097703475733}         0.009985
+best XGBoost (GPU, randomized search) params: {'colsample_bytree': np.float64(0.718456079008858), 'learning_rate': np.float64(0.014975289856365856), 'max_depth': 5, 'n_estimators': 162, 'reg_alpha': np.float64(0.017489966737814593), 'reg_lambda': np.float64(0.015575517641504765), 'subsample': np.float64(0.8769888477480079)}
+best XGBoost (GPU, randomized search) val (2023):  {'pr_auc': 0.012880541104624409, 'roc_auc': 0.8352751110940563, 'top_10pct_capture': 0.41895261845386533}
+best XGBoost (GPU, randomized search) test (2024, untouched during tuning): {'pr_auc': 0.008881566368699415, 'roc_auc': 0.8790662165760046, 'top_10pct_capture': 0.6983471074380165}

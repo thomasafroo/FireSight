@@ -170,6 +170,7 @@ def tune_random_search(
     n_iter: int,
     primary_metric: str = "average_precision",
     random_state: int = RANDOM_STATE,
+    n_jobs: int = -1,
 ) -> tuple[Any, dict[str, Any], pd.DataFrame]:
     """RandomizedSearchCV over a wide param space, kept temporally safe via PredefinedSplit.
 
@@ -188,6 +189,14 @@ def tune_random_search(
     changing what the model was fit on. The winner is refit on train only
     below, matching every other model in this module and keeping "test is
     never touched during tuning" true here too.
+
+    n_jobs defaults to -1 (one candidate per CPU core, same as before this
+    param existed). Pass n_jobs=1 for a GPU estimator (e.g. XGBoost with
+    device="cuda") — GPU training uses the whole device for a single fit, so
+    running multiple candidates in parallel subprocesses would have them
+    contend for the same GPU instead of speeding anything up, and can throw
+    CUDA out-of-memory errors depending on model/data size. See
+    tune_xgboost_gpu.py.
     """
     X = pd.concat([train[FEATURE_COLUMNS], val[FEATURE_COLUMNS]], ignore_index=True)
     y = pd.concat([train[LABEL_COLUMN], val[LABEL_COLUMN]], ignore_index=True)
@@ -201,7 +210,7 @@ def tune_random_search(
         cv=PredefinedSplit(test_fold),
         refit=False,
         random_state=random_state,
-        n_jobs=-1,
+        n_jobs=n_jobs,
         verbose=3,
     )
     search.fit(X, y)
@@ -231,9 +240,10 @@ def _run_random_search_and_report(
     train: pd.DataFrame,
     val: pd.DataFrame,
     test: pd.DataFrame,
+    n_jobs: int = -1,
 ) -> None:
     print(f"\n--- randomized search: {name} ({n_iter} sampled candidates) ---", flush=True)
-    model, params, results = tune_random_search(estimator, param_distributions, train, val, n_iter)
+    model, params, results = tune_random_search(estimator, param_distributions, train, val, n_iter, n_jobs=n_jobs)
     print(results[["params", "mean_test_score"]].to_string(index=False), flush=True)
     print(f"best {name} params: {params}", flush=True)
     print(f"best {name} val (2023):  {score_model(model, val)}", flush=True)
@@ -248,13 +258,11 @@ if __name__ == "__main__":
     _run_and_report("RandomForest", fit_random_forest, RANDOM_FOREST_GRID, train, val, test)
     _run_and_report("XGBoost", fit_xgboost, XGBOOST_GRID, train, val, test)
 
+    # XGBoost's randomized search runs separately on GPU (tune_xgboost_gpu.py) — not repeated
+    # here on CPU, since it's the same search space (XGBOOST_DISTRIBUTIONS) and would be pure
+    # redundant work. RandomForest has no GPU path in scikit-learn, so its randomized search
+    # still runs here.
     rf_estimator = RandomForestClassifier(class_weight="balanced", random_state=RANDOM_STATE, n_jobs=1)
-    xgb_estimator = XGBClassifier(
-        random_state=RANDOM_STATE, n_jobs=1, scale_pos_weight=_scale_pos_weight(train), eval_metric="aucpr"
-    )
     _run_random_search_and_report(
         "RandomForest (randomized search)", rf_estimator, RANDOM_FOREST_DISTRIBUTIONS, N_ITER, train, val, test
-    )
-    _run_random_search_and_report(
-        "XGBoost (randomized search)", xgb_estimator, XGBOOST_DISTRIBUTIONS, N_ITER, train, val, test
     )

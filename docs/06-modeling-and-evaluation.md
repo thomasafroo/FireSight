@@ -515,6 +515,21 @@ plausible for winter/shoulder-season fires specifically: they're more likely hum
 burning, equipment, campfires) than fuel/weather-driven, and every feature in `FEATURE_COLUMNS` is
 weather-derived.
 
+**Confirmed, not just plausible.** BC Wildfire Service's own historical incident records (the
+`FIRE_CAUSE` field in `WHSE_LAND_AND_NATURAL_RESOURCE.PROT_HISTORICAL_INCIDENTS_SP`, queried live via
+DataBC's public WFS endpoint for the Kamloops Fire Centre bbox, `FIRE_TYPE == "Fire"` only, 2012-2024)
+back this up directly: of 2,310 fire-season (May 1 - Oct 15) fires in the area, 59.5% are
+lightning-caused and 37.0% person-caused; of the 327 winter/shoulder-season (Nov-Apr) fires, that
+flips hard — **90.8% person-caused, 0.9% lightning**. December and February specifically (the two
+worst-missed months above) are the extreme case: every recorded winter/shoulder fire in those two
+months in this dataset (1 December fire, 3 February fires) is `Person`-caused. This is diagnostic
+confirmation only — `FIRE_CAUSE` exists solely for fires that already happened, so it can't become a
+per-cell/per-day predictive feature for days without one (see the "why this looks structural" note
+below); it just upgrades the human-cause explanation from a plausible read of weather conditions to a
+government-recorded fact, and rules out lightning-detection data (e.g. the Canadian Lightning
+Detection Network) as a fix, since there's essentially no lightning signal to detect in these months
+in the first place.
+
 Two feature-engineering attempts to close this gap were tried and **both failed to move it**:
 
 1. **Calendar features** (`day_of_year_sin`/`cos`, `is_weekend`, an `open_burning_season` flag
@@ -876,3 +891,310 @@ the `ModelBundle`, exposed via `/predict`'s and `/predict/live`'s `calibrated_pr
 `ignition_probability`/`risk_probability` are unchanged and still the field to use for ranking — the
 calibrator only rescales magnitude, and the caveat above (particularly unreliable in low-fire years)
 still applies to the calibrated number, so treat it as a much-improved estimate, not an exact one.
+
+## GPU-accelerated tuning (XGBoost)
+
+This dev machine has an NVIDIA GPU (RTX 4060 Laptop), which raised the obvious question: can any of
+this project's CPU-bound tuning move to it? The honest answer splits by model:
+
+- **XGBoost has native GPU support** — `tree_method="hist", device="cuda"` on the same
+  `XGBClassifier` used everywhere else in this project. No algorithm change, just a device flag.
+- **RandomForest does not** — `sklearn.ensemble.RandomForestClassifier` has no GPU code path at all.
+  The GPU-accelerated equivalent is RAPIDS' `cuml.ensemble.RandomForestClassifier`, but RAPIDS has
+  never shipped native Windows support (WSL2 only), which is a separate Linux environment, not a
+  package this project's `.venv` can just add. RandomForest tuning stays CPU-only here.
+
+**A real driver/CUDA-version mismatch had to be diagnosed and fixed before GPU XGBoost worked at
+all — worth recording the shape of it, not just the fix.** The first attempt looked like it worked
+(no error) but silently trained on CPU: `XGBClassifier(device="cuda").fit(...)` logged `WARNING: No
+visible GPU is found, setting device to CPU`, even though `nvidia-smi` clearly saw the RTX 4060 and
+`xgboost.build_info()` confirmed the installed wheel was compiled `USE_CUDA: True`. The actual cause
+was a version mismatch one layer down: that wheel (xgboost 3.4.0) was built against **CUDA 13.3**,
+which requires driver ≥590, and the machine's installed driver was 576.52 (good for CUDA up to
+12.9) — new enough that `nvidia-smi` worked fine, too old for this specific XGBoost build's CUDA
+runtime. XGBoost doesn't error on that mismatch, it just falls back, so a clean run is not by itself
+proof the GPU was used — confirmed the diagnosis by reproducing outside the tool sandbox too, to
+rule out a sandboxing artifact before concluding it was a driver issue. Fixed by updating the NVIDIA
+driver to 596.49 (reports CUDA 13.2 support, comfortably above the ≥590 floor); re-verified with a
+smoke fit that logged `XGBoost is running on: cuda:0` and with `nvidia-smi` showing real GPU
+utilization during a fit, not just `torch`/`xgboost` claiming a device is available.
+
+The same fix unblocked a second, unrelated GPU consumer: `training/sequence_model.py`'s
+`SequenceCNN` already had `device = torch.device("cuda" if torch.cuda.is_available() else "cpu")`
+written in from the start, but the default PyPI `torch` wheel is CPU-only, so it was silently
+running on CPU the whole time despite the code being GPU-ready. Fixed via `pyproject.toml`'s new
+`[tool.uv.sources]`/`[[tool.uv.index]]` entries pinning `torch` to the `cu132` build (matching the
+driver's reported CUDA 13.2, same as the XGBoost fix above) — confirmed via
+`torch.cuda.is_available()` returning `True` and `torch.cuda.get_device_name(0)` naming the RTX
+4060. Not yet benchmarked, since `sequence_model.py` hasn't been re-run since; that's a separate,
+still-open follow-up.
+
+**What changed in code:** `training/tune_xgboost_gpu.py` is a new, standalone entry point — same
+search space (`XGBOOST_DISTRIBUTIONS`, `N_ITER=15`) and same `PredefinedSplit`-based temporal-safety
+guarantee as the CPU XGBoost randomized search above, just with `tree_method="hist", device="cuda"`.
+`tune_random_search` gained an `n_jobs` parameter (default `-1`, so every existing call is
+unaffected) specifically so this script can pass `n_jobs=1`: `RandomizedSearchCV`'s `n_jobs`
+controls how many candidates run in parallel *processes*, which is exactly the right idea for CPU
+cores but the wrong one for a single GPU — parallel processes would contend for the same device
+instead of speeding anything up, and can throw CUDA out-of-memory errors depending on model/data
+size. `advanced_models.py`'s own `__main__` was trimmed to drop its CPU XGBoost randomized-search
+leg, since `tune_xgboost_gpu.py` now covers that exact search on GPU instead — redoing it on CPU
+would be pure duplicate work.
+
+**Measured result, same tuning session (2026-08-17):** the GPU XGBoost randomized search (15
+candidates) finished in well under a minute; the CPU RandomForest randomized search run right before
+it in the same session (also 15 candidates, same `tune_random_search` infrastructure) took hours.
+
+| stage | candidates | per-candidate fit time | total (sum of per-candidate times) |
+|---|---|---|---|
+| XGBoost, GPU (`tune_xgboost_gpu.py`) | 15 | 1.2s – 5.1s | ~39s |
+| RandomForest, CPU (`advanced_models.py`) | 15 | 14.1min – 86.1min | ~11.9h (serial sum; real wall-clock was shorter, since several candidates ran concurrently across CPU cores) |
+
+**This is not a clean same-algorithm GPU-vs-CPU benchmark, and shouldn't be read as "XGBoost is
+~1000x faster on this GPU" — say so plainly.** Two different algorithms are being compared (there is
+no CPU-vs-GPU number for the *same* algorithm here, since RandomForest has no GPU path to compare
+against at all), and the RandomForest side is deliberately single-threaded per candidate
+(`n_jobs=1` on the estimator, so `RandomizedSearchCV`'s own `n_jobs=-1` parallelizes across
+candidates instead — see
+[Widening the search](#widening-the-search-randomizedsearchcv--predefinedsplit)), which is slower
+per-candidate than RandomForest's usual all-cores mode by design, not a fair "best CPU can do"
+number either. What the comparison does honestly support: GPU histogram training made
+this project's existing 15-candidate tuning search — the same infrastructure, same temporal-safety
+guarantees, same search width — go from a multi-hour CPU run to a sub-minute one for XGBoost
+specifically, which is the actual, practical win, even without a precise multiplier attached to it.
+
+One more open thread this surfaced, not yet chased down: the CPU RandomForest randomized search's
+per-candidate times (14–86 minutes) are far slower than the "~20 minutes total for 15 candidates"
+baseline cited [above](#widening-the-search-randomizedsearchcv--predefinedsplit) from this project's
+earlier tuning round. That earlier number predates the fire-season scope change and the 2012 training
+extension, so the datasets aren't the same shape, and `n_jobs=-1`'s process-based parallelism on
+Windows already has a documented history of erratic scaling in this project (see the `n_iter=40`
+abandonment noted in the same earlier section) — plausible explanations, not a confirmed cause. Worth
+a closer look if CPU-side tuning time becomes a bottleneck again, but out of scope for this GPU setup
+work specifically.
+
+## Adding `cape`/`convective_precip_mm` to `FEATURE_COLUMNS`
+
+`cape` and `convective_precip_mm` (full ERA5's CAPE and convective precipitation — see
+[Weather join](04-weather-join.md#a-second-weather-source-full-era5s-cape-and-convective-precipitation)
+for what they are and why they were fetched) had already been joined into
+`kamloops_dataset.parquet` and enforced for completeness by `drop_incomplete_history`, but were
+**not actually in `FEATURE_COLUMNS`** — no model was training on them. `training/baseline.py` now
+includes both, added as a pair (matching how they were fetched and engineered together), bringing
+`FEATURE_COLUMNS` to 12 columns.
+
+### The re-tune result (2026-08-17 overnight run): no measured benefit
+
+`advanced_models.py` (CPU RandomForest, both the 8-candidate grid and the 15-candidate randomized
+search) and `tune_xgboost_gpu.py` (GPU XGBoost, 15-candidate randomized search) were re-run against
+the 12-column `FEATURE_COLUMNS` overnight. The only apples-to-apples comparison available is against
+the currently-served model from [the fire-season re-tune above](#re-tuning-after-the-fire-season-scope-change)
+— same search infrastructure, same `PredefinedSplit`, same train/val/test years, the only difference
+being these two extra columns:
+
+| | params | test PR-AUC | test ROC-AUC | test top-10% capture |
+|---|---|---|---|---|
+| RandomForest, 10 features (served, 2026-08-15) | 238 trees, depth 6, max_features 0.606, min_leaf 7 | **0.0106** | **0.884** | **71.9%** |
+| RandomForest, 12 features incl. cape (2026-08-17) | 438 trees, depth 7, max_features 0.775, min_leaf 8 | 0.00985 | 0.876 | 69.4% |
+
+Adding `cape`/`convective_precip_mm` did not improve any test-set metric — the 12-feature run is
+slightly **worse** on all three. Worth being precise about what that does and doesn't show: the old
+10-feature winning hyperparameters (238/6/0.606/7) were themselves resampled inside this run's
+15-candidate search and scored a val PR-AUC of 0.01388, a near-tie with the new winner's 0.01406 — so
+`RandomizedSearchCV` picked a different candidate on a razor-thin val margin, and that candidate
+happens to generalize slightly worse to the untouched 2024 test year. That's the same single-fold
+val-selection noise this document already flags elsewhere (e.g. the val/test gap discussion above), not
+strong evidence that CAPE/convective precip actively hurt the model — but it's equally not evidence
+they help. With only 15 sampled candidates and one test year, this is thin evidence either way, and
+a larger `n_iter` or a rolling-origin backtest (matching [the calibration
+work's](#does-pooled-leave-one-year-out-validated-calibration-help) methodology) would be needed to
+say more.
+
+**Decision: keep serving the existing 10-feature model, not tonight's result.** `export_model.py`'s
+`BEST_RANDOM_FOREST_PARAMS` and `data/processed/model.joblib` are **unchanged** — re-running
+`export_model.py` right now would have silently pulled in the new 12-column `FEATURE_COLUMNS` (it's a
+global import, not something the export step can selectively ignore) under the old hyperparameters, an
+untested combination, so the safer choice was to leave the already-persisted, already-validated bundle
+alone rather than promote anything new. This leaves a real inconsistency worth naming: `baseline.py`'s
+`FEATURE_COLUMNS` (used by `advanced_models.py`/`tune_xgboost_gpu.py` for any future tuning run) now
+lists 12 columns, while the model actually being served was fit on only the first 10 — each
+`ModelBundle` snapshots its own `feature_columns` at export time, so `api/main.py` and `/predict` stay
+correct regardless, but a future re-tune session should not assume the served model already reflects
+`cape`/`convective_precip_mm` just because `FEATURE_COLUMNS` includes them now.
+
+**A dormant known limitation, not currently active:** `/predict/live` works fine right now, because the
+served model was fit on the 10-column set and never asks for `cape`/`convective_precip_mm`. But the
+moment a future export actually promotes a model trained on the 12-column `FEATURE_COLUMNS`,
+`/predict/live` breaks — Open-Meteo's historical archive API (the live-weather source
+`features/live_weather.py` uses instead of ERA5-Land — see
+[Serving](07-serving.md#live-weather-for-predictlive)) has no `convective_precipitation_sum` parameter
+at all, and accepts `cape`/`cape_mean` as parameter names but returns `null` for every value tested —
+the data isn't actually populated in their archive product, only their forecast product. So this is
+worth resolving (a live CAPE/convective-precipitation source, or dropping the columns again) *before*
+any future re-tune's result is good enough to actually promote, not after. `features/convective.py`/
+`ingest_era5_convective.py` and the underlying joined data stay in place regardless, since they're the
+groundwork for revisiting this with a larger search or alongside the spatial-lag proposal below, not
+something today's result argues for deleting.
+
+## Future directions: four researched proposals (2026-08-17)
+
+**None of the four below are implemented yet — this is a research/planning record, not a result.**
+Each was investigated by an independent deep-dive against this project's actual code and documented
+history (not proposed in the abstract), specifically checking for leakage risk, fit against this
+project's temporal-safety discipline, and honest evidence of whether it's likely to actually help
+versus just add complexity. The `cape`/`convective_precip_mm` re-tune above has now finished (no
+measured benefit, prior model kept in production) — these four are next. Ranked by novelty-to-effort
+ratio, most promising first.
+
+### 1. Spatial-lag features (neighbor cells' recent fire history)
+
+Every model in this project, including the sequence-modeling experiment below, treats each grid cell
+as fully independent — nothing ever looks at a neighboring cell's weather or fire history, despite
+this being a regular geospatial grid. `features/grid.py::assign_cell_ids` makes this cheap to fix:
+`cell_id` is literally `"{row}_{col}"` from integer floor-division on a regular lat/lon grid, so a
+cell's 8 (Moore) neighbors are plain string construction (`f"{row±1}_{col±1}"`) — no KDTree/STRtree/
+GDAL needed, matching this project's existing "no GDAL, plain lat/lon math" style.
+
+**Proposed feature:** `neighbor_fire_count_Nd` (N ∈ {1, 3, 7}) — count of the 8 neighboring cells
+with `ignited=1` in the trailing N days, computed via a `date` × `cell_id` → `ignited` pivot, shifted,
+then summed across each cell's neighbor columns. No new dependency; drops straight into the existing
+`FEATURE_COLUMNS`/RandomForest/XGBoost pipeline.
+
+**The real hypothesis — and a self-correction worth keeping.** The initial framing assumed this would
+help the [winter/shoulder-season blind
+spot](#known-limitation-a-wintershoulder-season-blind-spot), but this project's own confirmed data
+argues against that: December/February fires are 90.8% person-caused and only 4 total across
+2012-2024 — isolated point-source ignitions, not spatially contiguous events. The two static
+distance-to-road/town features already tried and reverted for exactly that blind spot (see
+[above](#known-limitation-a-wintershoulder-season-blind-spot)) failed for the same underlying reason.
+The better-fit hypothesis is **fire-season spread dynamics** instead: a real wildfire physically
+growing into adjacent grid cells over consecutive days, which no current model can see. Worth
+checking the winter months anyway since it's cheap, but that's not the expected win.
+
+**Leakage — the one thing that must be gotten exactly right:** only strictly prior-day (`date ≤
+D-1`) neighbor status may be used. Same-day neighbor `ignited` would leak, since one large fire
+spanning multiple grid cells gets detected the same FIRMS day — same-day neighbor status would
+trivially predict the target and wouldn't exist yet at real prediction time. Same lagging discipline
+`days_since_rain`/`precip_7d` already use; the risk is implementing this as a same-day join by
+mistake.
+
+**Why it might fail:** neighbor cells could just correlate with the same regional weather already in
+`FEATURE_COLUMNS` (redundant, not new signal); grid edges have fewer neighbors (edge effects); at a
+~0.1-0.3% base rate, neighbor counts will mostly be zero, giving low variance to split on.
+
+**Evaluation:** same temporal split (train ≤2022/val 2023/test 2024), same `tune_model`/PR-AUC/
+top-10%-capture framework, real comparison against the current RandomForest on identical rows,
+matching `sequence_model.py`'s own methodology — adopted only on a measured win, not on the idea's
+plausibility.
+
+**A GNN was explicitly considered and rejected for now** — no evidence a graph architecture would
+beat RandomForest fed the same aggregate neighbor stats as ordinary features, and it's a heavier,
+unproven lift (`torch_geometric`'s compatibility with the pinned `torch==2.13.0+cu132` build isn't
+even verified yet). Matches this project's baseline-first bias — simple features first, more
+architecture only if the simple version shows real signal.
+
+**Effort/risk:** low-medium, roughly one session, no new dependency. Main risk is the leakage guard
+above, not the modeling idea itself.
+
+### 2. SHAP explainability
+
+The existing feature-importance work (MDI + permutation importance, see [Feature
+importance](#feature-importance-what-the-model-is-actually-leaning-on)) is entirely *global* — one
+ranking across the whole val/test set. It can say "soil moisture matters most on average," not "why
+did this specific cell get flagged high-risk on this specific day." SHAP gives *local*,
+per-prediction, additive attributions (each feature's contribution sums exactly to that one
+prediction's score) — the natural complement to the existing analysis, not a replacement for it.
+
+**Scope: offline analysis first, a live endpoint is a separate, later decision.** A one-time analysis
+script (matching the existing `permutation_importance` runs' style) producing (a) a SHAP summary/
+beeswarm plot across the test set, cross-checked against the existing MDI/permutation top-5 ranking
+(`swvl1`, `t2m_mean_7d`, `precip_30d`, `t2m`, `rh_mean_7d`) as the same kind of "not an artifact"
+cross-method-agreement argument already made for MDI vs. permutation, extended to a third, independent
+method — and (b) waterfall plots for the real Aug 2021 dates already spot-checked elsewhere in this
+project, e.g. "on 2021-08-04, soil moisture contributed +0.02, precip_30d +0.015 to this cell's
+flagged risk." A `/predict/explain` live endpoint is technically easy (`shap.TreeExplainer` is
+millisecond-fast per call for a RandomForest this size) but is new API surface with its own contract —
+treat as a follow-up, not bundled into the same change.
+
+**Two real gotchas found in current `shap` docs, both must be handled explicitly, not assumed:**
+1. Binary-classifier output shape (a list of two arrays vs. a single array) is version/config-
+   dependent — must be verified empirically against the installed `shap` version at implementation
+   time.
+2. The default `TreeExplainer` explains the raw tree margin, not calibrated probability. Getting SHAP
+   values that actually sum to `predict_proba`'s output requires `feature_perturbation="interventional"`,
+   `model_output="probability"`, and a background sample. Even then, SHAP can only decompose the
+   pre-calibration `ignition_probability` — the attached isotonic
+   [calibrator](#does-pooled-leave-one-year-out-validated-calibration-actually-help) is a separate
+   post-hoc regression on top of the raw score, not part of the tree structure, so there's no SHAP
+   decomposition of `calibrated_probability`. State this plainly wherever the results get written up
+   so it doesn't read as an oversight.
+
+**Effort:** a few hours for the offline stage (script + doc write-up, matching the existing analysis-
+script precedent). The live-endpoint stage is separate scope, not estimated here.
+
+### 3. Venn-Abers per-prediction uncertainty (not generic "conformal prediction")
+
+`calibration.py`'s pooled isotonic/sigmoid work (validated via
+[leave-one-year-out calibration checking](#does-pooled-leave-one-year-out-validated-calibration-actually-help))
+already found calibration reliability itself swings 6-51x by year in sparse years (2019/2020/2022,
+even after pooling) — but that instability is invisible to an API consumer today: `/predict` just
+returns one float, no matter how thin the calibration-set support behind it actually is.
+
+**Technique, and why not MAPIE:** MAPIE's classification prediction-set approach (a marginal-coverage
+guarantee that the true label lands in a predicted set) is built for choosing among multiple discrete
+classes/actions — an awkward fit for "how much do I trust this one ignition probability." Venn-Abers
+(`pip install venn-abers`, MIT license, pure numpy/sklearn, no new heavy dependency) is the right tool
+instead: for each prediction it produces a calibrated point probability `p_prime` *plus* an interval
+`[p0, p1]` bracketing it — a direct, per-row, machine-readable version of the exact caveat the
+year-dependent calibration finding already established, rather than a new claim.
+
+**Temporal safety — checked against the actual library source, not the README.** The high-level
+`VennAbersCalibrator` wrapper does its own random `cal_size` split internally, which would quietly
+reintroduce the random-split leakage this project's [temporal-split
+discipline](#splitting-by-time-never-randomly) exists to prevent. The low-level `VennAbers` class
+doesn't — `va.fit(p_cal, y_cal)` takes pre-computed calibration-set probabilities/labels directly,
+then `va.predict_proba(p_test)` returns `(p_prime, [p0, p1])`, the same signature shape as this
+project's existing `fit_isotonic_calibrator(y_score, y_true)`. Use the low-level class only; the
+wrapper is not safe to use as-is.
+
+**Evaluation, extending the existing LOYO rig rather than inventing a new one:** for each of the 8
+years, fit Venn-Abers on the other 7 years' pooled scores, apply to the held-out year, and report
+per year both `p_prime`'s Brier/top-bin-ratio (comparable to the existing isotonic/sigmoid columns)
+and mean interval width. **The real test:** do intervals actually widen honestly in 2019/2020/2022
+(the years already known to be least reliable), or does the interval claim false confidence there
+too?
+
+**Negative result, defined up front:** if interval width doesn't track the already-documented
+sparse-year unreliability, it isn't adding real signal over the existing static caveat — don't ship
+it, held to the same standard the reverted calendar/proximity features were.
+
+**Effort/risk:** low for validation (~half a day, one new light dependency, reuses the existing
+backtest infrastructure entirely). Higher for shipping (a new `ModelBundle`/API field) — gate that on
+the LOYO check actually confirming value first.
+
+### 4. Attention-pooling on the sequence model (a narrower angle than a full Transformer)
+
+See [Testing the sequence-modeling hypothesis](#testing-the-sequence-modeling-hypothesis) and
+[`research/neural-networks.md`](../research/neural-networks.md) for the full context: that experiment
+already ran and RandomForest won clearly (test PR-AUC 0.0106 vs. the CNN's 0.0062, top-10% capture
+71.9% vs. 68.6%), and this project has *twice* documented that more model capacity backfires on this
+data (the CNN result, plus an earlier uncapped-depth RandomForest diagnostic that cratered top-10%
+capture to 26.4%). A full multi-head self-attention/Transformer block would add capacity in exactly
+the setting already shown to punish that — not recommended.
+
+**Narrower proposal instead:** keep `SequenceCNN`'s `conv1`/`conv2` unchanged, replace
+`AdaptiveAvgPool1d(1)` with one `nn.Linear(hidden_channels*2, 1)` scoring each day + a softmax-weighted
+sum. This adds roughly 66 parameters — not "more capacity," so it tests a genuinely different,
+still-open question the original experiment didn't: does *learning which days to weight* beat uniform
+averaging, independent of the already-closed raw-sequence-vs-rolling-features question.
+
+**Interpretability artifact:** for ~8-10 real test-set fires (a mix of catches and misses), plot
+attention weight against day-in-window (1-30) — plus a table of mean attention-by-lag-day across all
+test positives, checking whether the model concentrates near the ignition day or spreads out evenly
+(evenly ≈ learned to reproduce plain averaging, a negative result). Reuses the exact same `temporal_
+split`/`score_sequence_model` harness — only the pooling layer changes, isolating one variable.
+
+**Honest framing:** pitched as a cheap (~30-60 min implementation, GPU makes training near-instant),
+low-risk experiment worth running for the interpretability artifact and research completeness — not
+as a likely path to beating RandomForest, given this project is 2-for-2 against "more capacity helps"
+so far.

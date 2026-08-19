@@ -1,0 +1,167 @@
+
+--- tuning RandomForest (8 candidates) ---
+[1/8] fitting {'n_estimators': 200, 'max_depth': 8, 'min_samples_leaf': 1}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:    7.2s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:   56.4s
+[Parallel(n_jobs=-1)]: Done 200 out of 200 | elapsed:  1.1min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 200 out of 200 | elapsed:    0.1s finished
+[1/8] {'pr_auc': 0.01281536969633351, 'roc_auc': 0.8325400265054063, 'top_10pct_capture': 0.4376558603491272}
+[2/8] fitting {'n_estimators': 200, 'max_depth': 8, 'min_samples_leaf': 5}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:    7.6s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:   55.6s
+[Parallel(n_jobs=-1)]: Done 200 out of 200 | elapsed:  1.1min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 200 out of 200 | elapsed:    0.1s finished
+[2/8] {'pr_auc': 0.012940789230077876, 'roc_auc': 0.8332325046535559, 'top_10pct_capture': 0.4463840399002494}
+[3/8] fitting {'n_estimators': 200, 'max_depth': 16, 'min_samples_leaf': 1}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:   10.2s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:  1.2min
+[Parallel(n_jobs=-1)]: Done 200 out of 200 | elapsed:  1.5min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 200 out of 200 | elapsed:    0.1s finished
+[3/8] {'pr_auc': 0.012057722964701884, 'roc_auc': 0.8187629707093235, 'top_10pct_capture': 0.4239401496259352}
+[4/8] fitting {'n_estimators': 200, 'max_depth': 16, 'min_samples_leaf': 5}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:   10.4s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:  1.2min
+[Parallel(n_jobs=-1)]: Done 200 out of 200 | elapsed:  1.5min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 200 out of 200 | elapsed:    0.1s finished
+[4/8] {'pr_auc': 0.012252276234521796, 'roc_auc': 0.8188819917617862, 'top_10pct_capture': 0.4251870324189526}
+[5/8] fitting {'n_estimators': 400, 'max_depth': 8, 'min_samples_leaf': 1}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:    7.9s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:   56.3s
+[Parallel(n_jobs=-1)]: Done 400 out of 400 | elapsed:  2.2min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 400 out of 400 | elapsed:    0.3s finished
+[5/8] {'pr_auc': 0.01285344664679784, 'roc_auc': 0.8340480109581936, 'top_10pct_capture': 0.4389027431421446}
+[6/8] fitting {'n_estimators': 400, 'max_depth': 8, 'min_samples_leaf': 5}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:    7.6s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:   55.6s
+[Parallel(n_jobs=-1)]: Done 400 out of 400 | elapsed:  2.2min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 400 out of 400 | elapsed:    0.3s finished
+[6/8] {'pr_auc': 0.012839896757775485, 'roc_auc': 0.8338767840230894, 'top_10pct_capture': 0.45261845386533667}
+[7/8] fitting {'n_estimators': 400, 'max_depth': 16, 'min_samples_leaf': 1}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:   10.3s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:  1.2min
+[Parallel(n_jobs=-1)]: Done 400 out of 400 | elapsed:  2.9min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 400 out of 400 | elapsed:    0.4s finished
+[7/8] {'pr_auc': 0.012173087641578189, 'roc_auc': 0.8225191804820502, 'top_10pct_capture': 0.4251870324189526}
+[8/8] fitting {'n_estimators': 400, 'max_depth': 16, 'min_samples_leaf': 5}
+[Parallel(n_jobs=-1)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=-1)]: Done   2 tasks      | elapsed:   10.1s
+[Parallel(n_jobs=-1)]: Done 152 tasks      | elapsed:  1.2min
+[Parallel(n_jobs=-1)]: Done 400 out of 400 | elapsed:  2.9min finished
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 400 out of 400 | elapsed:    0.3s finished
+[8/8] {'pr_auc': 0.012276336182126962, 'roc_auc': 0.8213575202510729, 'top_10pct_capture': 0.42768079800498754}
+{'n_estimators': 200, 'max_depth': 8, 'min_samples_leaf': 5, 'pr_auc': 0.012940789230077876, 'roc_auc': 0.8332325046535559, 'top_10pct_capture': 0.4463840399002494}
+{'n_estimators': 400, 'max_depth': 8, 'min_samples_leaf': 1, 'pr_auc': 0.01285344664679784, 'roc_auc': 0.8340480109581936, 'top_10pct_capture': 0.4389027431421446}
+{'n_estimators': 400, 'max_depth': 8, 'min_samples_leaf': 5, 'pr_auc': 0.012839896757775485, 'roc_auc': 0.8338767840230894, 'top_10pct_capture': 0.45261845386533667}
+{'n_estimators': 200, 'max_depth': 8, 'min_samples_leaf': 1, 'pr_auc': 0.01281536969633351, 'roc_auc': 0.8325400265054063, 'top_10pct_capture': 0.4376558603491272}
+{'n_estimators': 400, 'max_depth': 16, 'min_samples_leaf': 5, 'pr_auc': 0.012276336182126962, 'roc_auc': 0.8213575202510729, 'top_10pct_capture': 0.42768079800498754}
+{'n_estimators': 200, 'max_depth': 16, 'min_samples_leaf': 5, 'pr_auc': 0.012252276234521796, 'roc_auc': 0.8188819917617862, 'top_10pct_capture': 0.4251870324189526}
+{'n_estimators': 400, 'max_depth': 16, 'min_samples_leaf': 1, 'pr_auc': 0.012173087641578189, 'roc_auc': 0.8225191804820502, 'top_10pct_capture': 0.4251870324189526}
+{'n_estimators': 200, 'max_depth': 16, 'min_samples_leaf': 1, 'pr_auc': 0.012057722964701884, 'roc_auc': 0.8187629707093235, 'top_10pct_capture': 0.4239401496259352}
+best RandomForest params: {'n_estimators': 200, 'max_depth': 8, 'min_samples_leaf': 5}
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 200 out of 200 | elapsed:    0.1s finished
+best RandomForest val (2023):  {'pr_auc': 0.012940789230077876, 'roc_auc': 0.8332325046535559, 'top_10pct_capture': 0.4463840399002494}
+[Parallel(n_jobs=24)]: Using backend ThreadingBackend with 24 concurrent workers.
+[Parallel(n_jobs=24)]: Done   2 tasks      | elapsed:    0.0s
+[Parallel(n_jobs=24)]: Done 152 tasks      | elapsed:    0.1s
+[Parallel(n_jobs=24)]: Done 200 out of 200 | elapsed:    0.1s finished
+best RandomForest test (2024, untouched during tuning): {'pr_auc': 0.019164498191880684, 'roc_auc': 0.8796874879496064, 'top_10pct_capture': 0.7024793388429752}
+
+--- tuning XGBoost (8 candidates) ---
+[1/8] fitting {'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.05}
+[1/8] {'pr_auc': 0.012473517759136927, 'roc_auc': 0.8370267445011231, 'top_10pct_capture': 0.43516209476309226}
+[2/8] fitting {'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.1}
+[2/8] {'pr_auc': 0.012696525067876017, 'roc_auc': 0.8307663578965524, 'top_10pct_capture': 0.41271820448877805}
+[3/8] fitting {'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.05}
+[3/8] {'pr_auc': 0.012651782589715912, 'roc_auc': 0.8277560913090047, 'top_10pct_capture': 0.4002493765586035}
+[4/8] fitting {'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.1}
+[4/8] {'pr_auc': 0.012365118276936324, 'roc_auc': 0.8128128676124458, 'top_10pct_capture': 0.385286783042394}
+[5/8] fitting {'n_estimators': 400, 'max_depth': 4, 'learning_rate': 0.05}
+[5/8] {'pr_auc': 0.01218376294162131, 'roc_auc': 0.8259129111853801, 'top_10pct_capture': 0.39276807980049877}
+[6/8] fitting {'n_estimators': 400, 'max_depth': 4, 'learning_rate': 0.1}
+[6/8] {'pr_auc': 0.012322510535526696, 'roc_auc': 0.8137014951797815, 'top_10pct_capture': 0.4014962593516209}
+[7/8] fitting {'n_estimators': 400, 'max_depth': 6, 'learning_rate': 0.05}
+[7/8] {'pr_auc': 0.012472450716762076, 'roc_auc': 0.8122813522269519, 'top_10pct_capture': 0.3778054862842893}
+[8/8] fitting {'n_estimators': 400, 'max_depth': 6, 'learning_rate': 0.1}
+[8/8] {'pr_auc': 0.011216173881026446, 'roc_auc': 0.7796072969937111, 'top_10pct_capture': 0.35910224438902744}
+{'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.1, 'pr_auc': 0.012696525067876017, 'roc_auc': 0.8307663578965524, 'top_10pct_capture': 0.41271820448877805}
+{'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.05, 'pr_auc': 0.012651782589715912, 'roc_auc': 0.8277560913090047, 'top_10pct_capture': 0.4002493765586035}
+{'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.05, 'pr_auc': 0.012473517759136927, 'roc_auc': 0.8370267445011231, 'top_10pct_capture': 0.43516209476309226}
+{'n_estimators': 400, 'max_depth': 6, 'learning_rate': 0.05, 'pr_auc': 0.012472450716762076, 'roc_auc': 0.8122813522269519, 'top_10pct_capture': 0.3778054862842893}
+{'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.1, 'pr_auc': 0.012365118276936324, 'roc_auc': 0.8128128676124458, 'top_10pct_capture': 0.385286783042394}
+{'n_estimators': 400, 'max_depth': 4, 'learning_rate': 0.1, 'pr_auc': 0.012322510535526696, 'roc_auc': 0.8137014951797815, 'top_10pct_capture': 0.4014962593516209}
+{'n_estimators': 400, 'max_depth': 4, 'learning_rate': 0.05, 'pr_auc': 0.01218376294162131, 'roc_auc': 0.8259129111853801, 'top_10pct_capture': 0.39276807980049877}
+{'n_estimators': 400, 'max_depth': 6, 'learning_rate': 0.1, 'pr_auc': 0.011216173881026446, 'roc_auc': 0.7796072969937111, 'top_10pct_capture': 0.35910224438902744}
+best XGBoost params: {'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.1}
+best XGBoost val (2023):  {'pr_auc': 0.012696525067876017, 'roc_auc': 0.8307663578965524, 'top_10pct_capture': 0.41271820448877805}
+best XGBoost test (2024, untouched during tuning): {'pr_auc': 0.007656514505426613, 'roc_auc': 0.8808879716238269, 'top_10pct_capture': 0.6776859504132231}
+
+--- randomized search: RandomForest (randomized search) (15 sampled candidates) ---
+[CV 1/1] END max_depth=5, max_features=0.40034730118633244, min_samples_leaf=1, n_estimators=181;, score=0.013 total time=14.2min
+[CV 1/1] END max_depth=5, max_features=0.36949624525128166, min_samples_leaf=4, n_estimators=269;, score=0.013 total time=21.0min
+[CV 1/1] END max_depth=6, max_features=0.6063110478838847, min_samples_leaf=7, n_estimators=238;, score=0.014 total time=32.4min
+[CV 1/1] END max_depth=13, max_features=0.34972524073852085, min_samples_leaf=5, n_estimators=265;, score=0.013 total time=37.5min
+[CV 1/1] END max_depth=16, max_features=0.5684090631780443, min_samples_leaf=7, n_estimators=189;, score=0.012 total time=40.6min
+[CV 1/1] END max_depth=16, max_features=0.6979037642080539, min_samples_leaf=1, n_estimators=203;, score=0.012 total time=54.8min
+[CV 1/1] END max_depth=4, max_features=0.8828338918835565, min_samples_leaf=1, n_estimators=488;, score=0.013 total time=59.0min
+[CV 1/1] END max_depth=11, max_features=0.6359840206625401, min_samples_leaf=2, n_estimators=315;, score=0.013 total time=61.3min
+[CV 1/1] END max_depth=14, max_features=0.5902633579933665, min_samples_leaf=4, n_estimators=333;, score=0.013 total time=68.8min
+[CV 1/1] END max_depth=7, max_features=0.7752156710832722, min_samples_leaf=8, n_estimators=438;, score=0.014 total time=71.1min
+[CV 1/1] END max_depth=8, max_features=0.7772742093724383, min_samples_leaf=9, n_estimators=407;, score=0.013 total time=72.8min
+[CV 1/1] END max_depth=9, max_features=0.728467005905695, min_samples_leaf=5, n_estimators=423;, score=0.014 total time=74.0min
+[CV 1/1] END max_depth=7, max_features=0.8594109949517064, min_samples_leaf=4, n_estimators=435;, score=0.013 total time=76.1min
+[CV 1/1] END max_depth=15, max_features=0.6814182280978278, min_samples_leaf=4, n_estimators=427;, score=0.012 total time=90.3min
+[CV 1/1] END max_depth=16, max_features=0.7149912327575128, min_samples_leaf=1, n_estimators=473;, score=0.012 total time=97.6min
+Fitting 1 folds for each of 15 candidates, totalling 15 fits
+                                                                                            params  mean_test_score
+  {'max_depth': 7, 'max_features': 0.7752156710832722, 'min_samples_leaf': 8, 'n_estimators': 438}         0.014061
+  {'max_depth': 6, 'max_features': 0.6063110478838847, 'min_samples_leaf': 7, 'n_estimators': 238}         0.013878
+   {'max_depth': 9, 'max_features': 0.728467005905695, 'min_samples_leaf': 5, 'n_estimators': 423}         0.013764
+ {'max_depth': 11, 'max_features': 0.6359840206625401, 'min_samples_leaf': 2, 'n_estimators': 315}         0.013451
+{'max_depth': 13, 'max_features': 0.34972524073852085, 'min_samples_leaf': 5, 'n_estimators': 265}         0.013054
+ {'max_depth': 14, 'max_features': 0.5902633579933665, 'min_samples_leaf': 4, 'n_estimators': 333}         0.012928
+ {'max_depth': 5, 'max_features': 0.36949624525128166, 'min_samples_leaf': 4, 'n_estimators': 269}         0.012858
+ {'max_depth': 5, 'max_features': 0.40034730118633244, 'min_samples_leaf': 1, 'n_estimators': 181}         0.012787
+  {'max_depth': 7, 'max_features': 0.8594109949517064, 'min_samples_leaf': 4, 'n_estimators': 435}         0.012755
+  {'max_depth': 4, 'max_features': 0.8828338918835565, 'min_samples_leaf': 1, 'n_estimators': 488}         0.012704
+  {'max_depth': 8, 'max_features': 0.7772742093724383, 'min_samples_leaf': 9, 'n_estimators': 407}         0.012653
+ {'max_depth': 16, 'max_features': 0.5684090631780443, 'min_samples_leaf': 7, 'n_estimators': 189}         0.012232
+ {'max_depth': 15, 'max_features': 0.6814182280978278, 'min_samples_leaf': 4, 'n_estimators': 427}         0.012115
+ {'max_depth': 16, 'max_features': 0.7149912327575128, 'min_samples_leaf': 1, 'n_estimators': 473}         0.011828
+ {'max_depth': 16, 'max_features': 0.6979037642080539, 'min_samples_leaf': 1, 'n_estimators': 203}         0.011796
+best RandomForest (randomized search) params: {'max_depth': 7, 'max_features': np.float64(0.7752156710832722), 'min_samples_leaf': 8, 'n_estimators': 438}
+best RandomForest (randomized search) val (2023):  {'pr_auc': 0.014061392470089073, 'roc_auc': 0.8315648217529696, 'top_10pct_capture': 0.43266832917705733}
+best RandomForest (randomized search) test (2024, untouched during tuning): {'pr_auc': 0.009850753711245306, 'roc_auc': 0.8759183636976522, 'top_10pct_capture': 0.6942148760330579}

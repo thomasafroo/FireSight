@@ -42,3 +42,14 @@ dev = [
 # repo root isn't on sys.path by default under `uv run pytest` (unlike `python -m pytest`),
 # which breaks tests/test_api.py's `import api.main` for the root-level api/ package.
 pythonpath = ["."]
+
+[tool.uv.sources]
+# Default PyPI torch is CPU-only. cu132 matches this dev machine's NVIDIA driver (reports
+# CUDA 13.2 support) so sequence_model.py's SequenceCNN actually runs on GPU instead of
+# silently falling back to CPU (torch.cuda.is_available() was False before this).
+torch = { index = "pytorch-cu132" }
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true

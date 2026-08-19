@@ -121,3 +121,13 @@ PR-AUC and top-10%-capture. See [Testing the sequence-modeling
 hypothesis](../docs/06-modeling-and-evaluation.md#testing-the-sequence-modeling-hypothesis) for the
 full numbers. This closes the one open question this document left — no remaining neural-network angle
 here is recommended.
+
+**Update 2026-08-17: a narrower, still-open angle proposed (not yet run).** A full self-attention/
+Transformer block on the sequence data would just be more capacity in a setting this document has now
+shown twice to punish that (the CNN result above, plus the uncapped-depth RandomForest diagnostic) —
+not proposed. A much smaller change is: swap `SequenceCNN`'s average-pool for a ~66-parameter learned
+attention-pooling readout, which tests a genuinely different, still-open question ("does learning
+which days to weight beat uniform averaging") rather than reopening the closed one. Full plan,
+interpretability artifact design, and honest framing (cheap experiment worth running for research
+completeness, not expected to beat RandomForest) in [Future
+directions](../docs/06-modeling-and-evaluation.md#4-attention-pooling-on-the-sequence-model-a-narrower-angle-than-a-full-transformer).

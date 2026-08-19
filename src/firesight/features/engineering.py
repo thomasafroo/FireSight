@@ -30,6 +30,11 @@ ENGINEERED_COLUMNS = [
     "t2m_mean_7d",
     "t2m_trend_7d",
     "rh_mean_7d",
+    # cape/convective_precip_mm arrive already-complete daily values straight from
+    # features/convective.py's join (no per-cell rolling computation needed here, unlike the
+    # features above) — listed so drop_incomplete_history still enforces completeness on them.
+    "cape",
+    "convective_precip_mm",
 ]
 
 

@@ -44,6 +44,14 @@ FEATURE_COLUMNS: list[str] = [
     "precip_30d",
     "t2m_mean_7d",
     "rh_mean_7d",
+    # cape/convective_precip_mm added 2026-08-17 — the storm/lightning-potential proxy from full
+    # ERA5 (see features/convective.py), joined in as a pair matching how they were fetched/
+    # engineered together. /predict/live cannot supply either (Open-Meteo's historical archive API
+    # has no working cape data — the parameter is accepted but returns null for every value tested
+    # — and no convective_precipitation_sum parameter at all), so that endpoint now fails with its
+    # existing "insufficient weather history" error until a live source is found; see docs/07.
+    "cape",
+    "convective_precip_mm",
 ]
 LABEL_COLUMN = "ignited"
 DATE_COLUMN = "date"
