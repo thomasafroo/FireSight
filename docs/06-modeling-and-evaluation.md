@@ -1038,14 +1038,14 @@ something today's result argues for deleting.
 
 ## Future directions: four researched proposals (2026-08-17)
 
-**Proposal 1 below (spatial-lag features) has since been implemented, validated, and promoted to the
-served model** — see [Spatial-lag features: implemented and promoted
-(2026-08-19)](#spatial-lag-features-implemented-and-promoted-2026-08-19) after the original proposal
-text. Proposals 2-4 remain research/planning records, not results, investigated by an independent
-deep-dive against this project's actual code and documented history (not proposed in the abstract),
-specifically checking for leakage risk, fit against this project's temporal-safety discipline, and
-honest evidence of whether each is likely to actually help versus just add complexity. Ranked by
-novelty-to-effort ratio, most promising first.
+**Proposals 1 and 2 below have since been implemented** — see [Spatial-lag features: implemented and
+promoted (2026-08-19)](#spatial-lag-features-implemented-and-promoted-2026-08-19) and [SHAP
+explainability: implemented (2026-08-19)](#shap-explainability-implemented-2026-08-19), each after its
+original proposal text. Proposals 3-4 remain research/planning records, not results, investigated by
+an independent deep-dive against this project's actual code and documented history (not proposed in
+the abstract), specifically checking for leakage risk, fit against this project's temporal-safety
+discipline, and honest evidence of whether each is likely to actually help versus just add complexity.
+Ranked by novelty-to-effort ratio, most promising first.
 
 ### 1. Spatial-lag features (neighbor cells' recent fire history)
 
@@ -1204,6 +1204,88 @@ treat as a follow-up, not bundled into the same change.
 
 **Effort:** a few hours for the offline stage (script + doc write-up, matching the existing analysis-
 script precedent). The live-endpoint stage is separate scope, not estimated here.
+
+### SHAP explainability: implemented (2026-08-19)
+
+`evaluation/shap_analysis.py` implements the offline stage of the proposal above, against the served
+model (13-column `FEATURE_COLUMNS` including `neighbor_fire_count_{1,3,7}d`, promoted the same day —
+see the previous section). Both gotchas were handled exactly as planned, not assumed:
+
+1. **Output shape, verified against the installed `shap==0.52.0`:** `TreeExplainer(...)` called on a
+   `DataFrame` returns a single `(n_samples, n_features, n_classes)` array — not the "list of two
+   arrays" shape some other shap versions/configs use. `_positive_class_explanation` asserts this
+   shape and raises loudly rather than silently misreading which slice is the positive class if a
+   future shap upgrade changes it again.
+2. **Additivity to `predict_proba`, checked by reconstruction, not assumed:** `explain()` sums each
+   row's SHAP values plus its base value and asserts the result matches `model.predict_proba`'s raw
+   output to `1e-4`, for every call — a broken reconstruction would mean the attributions don't
+   actually explain what they claim to. As documented up front, everything below is in raw
+   `ignition_probability` units; there is no SHAP decomposition of the isotonic-calibrated
+   `calibrated_probability`, since the calibrator is a separate post-hoc regression bolted on after
+   the tree ensemble.
+
+**The global SHAP ranking does *not* match MDI's, and that discrepancy was chased down rather than
+left unexplained.** MDI (see the previous section) put `neighbor_fire_count_7d`/`_3d`/`_1d` at 89% of
+total importance combined. Mean |SHAP| over an unbiased 3,000-row random test-set sample tells a
+different-looking story:
+
+| feature | mean \|SHAP\| |
+|---|---|
+| `swvl1` | 0.0267 |
+| `t2m` | 0.0191 |
+| `t2m_mean_7d` | 0.0147 |
+| `precip_mm` | 0.0126 |
+| `rh_mean_7d` | 0.0074 |
+| `neighbor_fire_count_7d` | 0.0058 |
+| `wind_speed` | 0.0052 |
+| `precip_30d` | 0.0051 |
+| `days_since_rain` | 0.0042 |
+| `relative_humidity` | 0.0042 |
+| `precip_7d` | 0.0033 |
+| `neighbor_fire_count_3d` | 0.0008 |
+| `neighbor_fire_count_1d` | 0.0006 |
+
+This is a real, non-contradictory disagreement between two honest measures, not a sign either one is
+wrong — checked directly, not just reasoned about: `neighbor_fire_count_7d` is exactly 0 for 98.6% of
+test rows (239,096 / 242,424), and its mean |SHAP| on that subset is **exactly 0.000000**, vs.
+**0.474** on the 1.4% of rows where it's nonzero. MDI reflects how decisive a feature is *when the
+tree actually splits on it*; mean |SHAP| over a random population instead gets diluted by the huge
+majority of rows where a near-always-zero feature contributes nothing at all. **Both are true at
+once:** `neighbor_fire_count` is by far the single most decisive feature on the small share of
+cell-days where a fire is actually spreading nearby, and irrelevant — weather genuinely is what's left
+to differentiate on — everywhere else. The existing MDI-vs-permutation cross-check (two methods
+agreeing is stronger evidence than one) doesn't directly transfer here, since SHAP and MDI are
+answering subtly different questions ("decisiveness when used" vs. "population-average contribution")
+for a feature this heavily zero-inflated — worth naming explicitly rather than picking whichever
+ranking looks more convenient.
+
+**Three real per-prediction waterfalls, picked from actual test-set rows** (a random sample, plus
+every one of the test set's 242 real fires, so genuine caught/missed examples were guaranteed to
+exist rather than left to chance — an earlier run of this same script against a purely random
+3,000-row sample happened to contain zero fires at all):
+
+- **A caught fire** (cell `1119_-1711`, 2024-07-20, `ignition_probability=0.997`): `neighbor_fire_count_7d`
+  (+0.517), `_3d` (+0.161), `_1d` (+0.060) are the top three contributors by a wide margin — this
+  fire was flagged almost entirely because it had 11 neighbor ignitions in the trailing week.
+- **The highest-scored non-fire** (cell `1122_-1713`, 2024-08-06, `ignition_probability=0.995`): the
+  same shape — `neighbor_fire_count_7d` (+0.595), `_3d` (+0.147), `_1d` (+0.072) dominate. This cell
+  sat in the middle of an active nearby cluster and, by the model's own reasoning, looked exactly like
+  the fires around it — a legible, defensible false positive, not an inexplicable one.
+- **A real missed fire** (cell `1141_-1693`, 2024-07-22, `ignition_probability=0.275`, below the
+  test set's own top-10% cutoff): **no `neighbor_fire_count` feature appears anywhere in its top-6
+  contributions at all.** The drivers are entirely weather (`swvl1` +0.082, `t2m` +0.066,
+  `t2m_mean_7d` +0.060, `wind_speed` -0.039, `relative_humidity` +0.016, `rh_mean_7d` +0.009) — a
+  concrete, individual confirmation of the mechanism proposed when spatial-lag features were first
+  motivated above: a fire with no nearby recent precursor gets scored on weather alone, the same
+  ceiling every purely-weather-driven prediction already had before this feature existed.
+
+Plots (`shap_beeswarm.png` and the three `shap_waterfall_*.png` files above) were saved to
+`data/processed/` (gitignored build output, same as `model.joblib`) rather than committed or embedded
+in this markdown file, matching this project's existing prose-and-tables documentation style.
+
+**Not done, deliberately out of scope for this pass:** a `/predict/explain` live endpoint. Technically
+easy (`TreeExplainer` is millisecond-fast per call at this model's size) but new API surface with its
+own contract, held as a separate, later follow-up rather than bundled into an already-large session.
 
 ### 3. Venn-Abers per-prediction uncertainty (not generic "conformal prediction")
 
