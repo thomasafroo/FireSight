@@ -1038,13 +1038,14 @@ something today's result argues for deleting.
 
 ## Future directions: four researched proposals (2026-08-17)
 
-**None of the four below are implemented yet — this is a research/planning record, not a result.**
-Each was investigated by an independent deep-dive against this project's actual code and documented
-history (not proposed in the abstract), specifically checking for leakage risk, fit against this
-project's temporal-safety discipline, and honest evidence of whether it's likely to actually help
-versus just add complexity. The `cape`/`convective_precip_mm` re-tune above has now finished (no
-measured benefit, prior model kept in production) — these four are next. Ranked by novelty-to-effort
-ratio, most promising first.
+**Proposal 1 below (spatial-lag features) has since been implemented, validated, and promoted to the
+served model** — see [Spatial-lag features: implemented and promoted
+(2026-08-19)](#spatial-lag-features-implemented-and-promoted-2026-08-19) after the original proposal
+text. Proposals 2-4 remain research/planning records, not results, investigated by an independent
+deep-dive against this project's actual code and documented history (not proposed in the abstract),
+specifically checking for leakage risk, fit against this project's temporal-safety discipline, and
+honest evidence of whether each is likely to actually help versus just add complexity. Ranked by
+novelty-to-effort ratio, most promising first.
 
 ### 1. Spatial-lag features (neighbor cells' recent fire history)
 
@@ -1095,6 +1096,78 @@ architecture only if the simple version shows real signal.
 
 **Effort/risk:** low-medium, roughly one session, no new dependency. Main risk is the leakage guard
 above, not the modeling idea itself.
+
+### Spatial-lag features: implemented and promoted (2026-08-19)
+
+`features/engineering.py::add_neighbor_fire_features` implements exactly the proposal above:
+`neighbor_fire_count_{1,3,7}d`, a strictly-prior-day count of each cell's 8 Moore neighbors that
+ignited in the trailing N days. Implementation detail worth naming: rather than looping per cell, the
+whole `(date × cell_id)` ignited panel is shifted forward one day (so day *D*'s row holds day *D-1*'s
+ignited status — the leakage guard the proposal called out as the one thing that must be exactly
+right), rolled per window, then multiplied by a dense 0/1 Moore-adjacency matrix built once from
+`cell_id`'s `"{row}_{col}"` scheme — a single matrix multiply per window instead of 1,443 separate
+per-cell sums, and fast enough (a few seconds) that no sparse-matrix dependency was needed. Added to
+`ENGINEERED_COLUMNS` (so `drop_incomplete_history` enforces its own 1/3/7-day warm-up the same way it
+does for `precip_7d`/`precip_30d`) and to `training/baseline.py::FEATURE_COLUMNS`, in place of
+`cape`/`convective_precip_mm` (left out of the active feature list for this run, not deleted — see
+that section above — to keep this a clean, single-variable test against the served 10-feature model
+rather than a result confounded by an already-inconclusive pair of columns).
+
+**The result is far larger than any other change tried on this project, and was checked hard for
+leakage before being trusted.** Refitting the served model's exact hyperparameters
+(`BEST_RANDOM_FOREST_PARAMS`, unchanged) on the resulting 13-column set:
+
+| | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+|---|---|---|---|---|---|---|
+| RandomForest, 10 features (served, pre-2026-08-19) | 0.0138 | 0.832 | 41.9% | 0.0106 | 0.884 | 71.9% |
+| RandomForest, 13 features incl. neighbor_fire_count | **0.365** | **0.963** | **90.8%** | **0.373** | **0.951** | **86.0%** |
+
+A freshly GPU-tuned XGBoost (`tune_xgboost_gpu.py`, `XGBOOST_DISTRIBUTIONS`, 15 candidates, same
+13-column set) independently landed at a similar order of magnitude — test PR-AUC 0.372, ROC-AUC
+0.950, top-10% capture 86.4% — confirming this isn't one model family's quirk. MDI feature importance
+on the refit RandomForest shows `neighbor_fire_count_7d`/`_3d`/`_1d` at 0.570/0.238/0.083
+respectively (89% of total importance combined), dwarfing `swvl1` (previously the top feature at
+0.269, now 0.020) — the model now leans on this feature almost exclusively.
+
+**Why this isn't leakage, checked directly rather than assumed:** a jump this large demands the same
+scrutiny the `tp` accumulation bug in [Weather join](04-weather-join.md#the-tp-bug-and-how-it-was-
+actually-caught) got — internal consistency (no crash, a plausible-looking pattern) isn't proof of
+correctness. Three checks, not one:
+
+1. **Ignited-rate-by-bucket is monotonic and physically sane**, not a step function that would
+   suggest a same-day identity leak: `neighbor_fire_count_1d = 0` -> 0.04% ignition rate (near the
+   ~0.15% fire-season base rate); `= 5` -> 68.7%. `neighbor_fire_count_7d` shows the same monotonic
+   climb (0.03% at 0 -> 31.4% at 10+).
+2. **A manual per-fire trace against the raw `(cell_id, date, ignited)` rows**, not just the derived
+   column, confirms the shift-then-roll logic: a cell that ignited 2021-08-19 shows
+   `neighbor_fire_count_1d = 1` because a Moore neighbor ignited the prior day (2021-08-18), rising to
+   `neighbor_fire_count_3d/7d = 2` as the fire visibly spread across neighboring cells over the
+   following days — the feature is tracking real, physical fire spread, not an artifact. A separate
+   fire with no local precursor correctly shows all three counts at 0.
+3. **Same-day exclusion holds**: for that same manually-traced fire, the day *before* ignition
+   (2021-08-18, when no neighbor had yet ignited) correctly shows `neighbor_fire_count_1d = 0` — a
+   same-day leak would have shown a nonzero count one day earlier than it should.
+
+**Why the effect size makes sense, not just why it isn't a bug:** every prior feature in
+`FEATURE_COLUMNS` is weather — a slow-moving proxy for fuel dryness. `neighbor_fire_count` is the
+first feature that's a direct, physical precursor of the event itself: on a 5km grid, a wildfire
+actively burning in an adjacent cell is about as strong a same-week ignition signal as this project
+could hand a model, categorically different from "the air is hot and dry nearby." This also reframes
+part of the [rolling-origin backtest instability](#rolling-origin-backtest-is-719-typical-or-the-best-
+year-in-the-dataset) and [extreme-year degradation](#why-performance-swings-by-month-and-year)
+findings above: those were diagnosed against a purely weather-driven model with no way to see a fire
+already spreading nearby, which this feature directly targets — not re-verified against this feature
+yet, a natural next check rather than an assumption.
+
+**Promoted to the served model** (`export_model.py::BEST_RANDOM_FOREST_PARAMS`, unchanged
+hyperparameters, refit on the new 13-column `FEATURE_COLUMNS`; `data/processed/model.joblib`
+re-exported) on the strength of this measured, leakage-checked, cross-model-family-confirmed win — no
+wider hyperparameter re-tune was run first, since the gain is large enough on the existing params
+alone that waiting on one wasn't necessary to justify promoting (a possible future refinement, not a
+blocker). **This breaks `/predict/live`** — see
+[Serving](07-serving.md#live-weather-for-predictlive) — accepted deliberately, the same "dormant
+limitation" tradeoff already made for `cape`/`convective_precip_mm`, except this one is active
+immediately rather than dormant, since this is the feature set actually being promoted.
 
 ### 2. SHAP explainability
 

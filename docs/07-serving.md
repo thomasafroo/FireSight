@@ -101,22 +101,34 @@ weight-features), `FEATURE_COLUMNS` no longer needs `d2m` or `u10`/`v10` for any
 any engineered column still comes back `NaN` (insufficient history), `build_live_feature_row` raises
 rather than guessing, which the endpoint surfaces as a 422.
 
-**A dormant known limitation, not active right now:** `cape`/`convective_precip_mm` were added to
-`training/baseline.py::FEATURE_COLUMNS` on 2026-08-17, but the served model (`data/processed/
-model.joblib`) was deliberately **not** re-exported against that 12-column set — the overnight re-tune
-showed no measured benefit from the two new columns (see [Modeling &
+**A dormant known limitation that never activated:** `cape`/`convective_precip_mm` were added to
+`training/baseline.py::FEATURE_COLUMNS` on 2026-08-17, but the served model was deliberately **not**
+re-exported against that set — the overnight re-tune showed no measured benefit (see [Modeling &
 evaluation](06-modeling-and-evaluation.md#the-re-tune-result-2026-08-17-overnight-run-no-measured-benefit)),
-so the model actually serving `/predict/live` today still only needs the original 10 columns, and every
-endpoint works normally. This limitation would only activate if a future export promotes a model
-trained on the 12-column set: `cape`/`convective_precip_mm` come from full ERA5, not Open-Meteo, and
-Open-Meteo's historical archive API has no `convective_precipitation_sum` parameter at all, while its
-`cape`/`cape_mean` parameters are accepted but return `null` for every value tested (not populated in
-their archive product, only their forecast one) — `build_live_feature_row` would have no way to fetch
-either, so `/predict/live` would hit the "insufficient weather history" 422 described above on every
-call, unconditionally. `/predict` (a caller-supplied raw feature vector) and `/risk-map` (historical
-replay from the already-joined parquet, which does have both columns) would be unaffected either way.
-Worth resolving — a live CAPE/convective-precipitation source, or dropping the columns again — before
-any future re-tune's result is actually good enough to promote.
+so they were left out of the feature list entirely (see that page's [spatial-lag
+section](06-modeling-and-evaluation.md#1-spatial-lag-features-neighbor-cells-recent-fire-history)) and
+this limitation never actually triggered. Recorded here as a general warning, since the same shape of
+problem *did* trigger for a different feature below.
+
+**An active limitation as of 2026-08-19: `/predict/live` is currently broken.**
+`neighbor_fire_count_{1,3,7}d` (a strictly-prior-day count of a cell's 8 Moore neighbors that ignited
+recently — see [Modeling & evaluation](06-modeling-and-evaluation.md#spatial-lag-features-implemented-
+and-promoted-2026-08-19)) was promoted to the served model on the strength of a very large, carefully
+leakage-checked test-set improvement. Unlike every other feature in `FEATURE_COLUMNS`, this one needs
+*recent fire-detection history*, not weather — Open-Meteo (or any weather API) has no way to supply
+it, and `features/live_weather.py::build_live_feature_row` only ever fetches weather. Every
+`/predict/live` call now raises a 422 ("insufficient weather history") unconditionally, the same
+failure mode described above, just permanently triggered rather than dormant. This was a deliberate,
+informed tradeoff (see the promotion note in Modeling & evaluation), not an oversight discovered after
+the fact — the size of the accuracy gain was judged to outweigh a temporarily broken live endpoint on
+what is still an MVP. `/predict` (a caller-supplied raw feature vector — a caller could in principle
+compute `neighbor_fire_count` themselves from a live FIRMS feed and supply it directly) and
+`/risk-map` (historical replay from the already-joined parquet, which has the column) are unaffected.
+**Fixing this for real** needs a near-real-time fire-detection feed — NASA FIRMS itself publishes an
+NRT (near-real-time) product with much lower latency than the archived data this project's training
+pipeline uses — wired into a new `build_live_feature_row`-style function that also needs each
+neighbor's own recent detection history, not just the target cell's. Not yet built; a clearly-scoped
+follow-up, not a research question the way the four proposals above are.
 
 **CORS defaults to wide open** (`allow_origins=["*"]`), but is now configurable via the
 `FIRESIGHT_CORS_ORIGINS` env var (comma-separated list of allowed origins) rather than hardcoded —

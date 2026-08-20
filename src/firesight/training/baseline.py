@@ -44,14 +44,25 @@ FEATURE_COLUMNS: list[str] = [
     "precip_30d",
     "t2m_mean_7d",
     "rh_mean_7d",
-    # cape/convective_precip_mm added 2026-08-17 — the storm/lightning-potential proxy from full
-    # ERA5 (see features/convective.py), joined in as a pair matching how they were fetched/
-    # engineered together. /predict/live cannot supply either (Open-Meteo's historical archive API
-    # has no working cape data — the parameter is accepted but returns null for every value tested
-    # — and no convective_precipitation_sum parameter at all), so that endpoint now fails with its
-    # existing "insufficient weather history" error until a live source is found; see docs/07.
-    "cape",
-    "convective_precip_mm",
+    # cape/convective_precip_mm (full-ERA5 storm/lightning-potential proxy, features/convective.py)
+    # were added 2026-08-17 and re-tuned, but the 2026-08-17 overnight run showed no measured
+    # benefit over the served 10-feature model on the untouched test set (see docs/06-modeling-
+    # and-evaluation.md#the-re-tune-result-2026-08-17-overnight-run-no-measured-benefit) — left out
+    # of FEATURE_COLUMNS for now so this list matches what advanced_models.py should actually
+    # search next, rather than accumulating every historically-tried column. The joined columns
+    # and dataset are unaffected (still in kamloops_dataset.parquet, still enforced complete by
+    # drop_incomplete_history) so they're one line away from being added back for a future combined
+    # search alongside neighbor_fire_count below.
+    #
+    # neighbor_fire_count_{1,3,7}d added 2026-08-19 — strictly-prior-day count of a cell's 8 Moore
+    # neighbors that ignited in the trailing N days (features/engineering.py::
+    # add_neighbor_fire_features), the fire-season spread-dynamics feature proposed in
+    # docs/06-modeling-and-evaluation.md#1-spatial-lag-features-neighbor-cells-recent-fire-history.
+    # Not yet a promoted feature of the served model — added here only so advanced_models.py's
+    # tuning search can evaluate it, same staging cape/convective_precip_mm went through above.
+    "neighbor_fire_count_1d",
+    "neighbor_fire_count_3d",
+    "neighbor_fire_count_7d",
 ]
 LABEL_COLUMN = "ignited"
 DATE_COLUMN = "date"

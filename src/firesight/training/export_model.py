@@ -57,6 +57,19 @@ MODEL_PATH = Path("data/processed/model.joblib")
 # Refitting these same params on the smaller feature set left val/test scores within noise of the
 # 16-feature version (e.g. test top-10% capture unchanged at 71.9%), confirming those columns
 # really were dead weight rather than something the params happened to lean on.
+#
+# Re-exported again 2026-08-19 after adding neighbor_fire_count_{1,3,7}d to FEATURE_COLUMNS (see
+# docs/06-modeling-and-evaluation.md#1-spatial-lag-features-neighbor-cells-recent-fire-history) —
+# a strictly-prior-day count of a cell's 8 Moore neighbors that ignited recently
+# (features/engineering.py::add_neighbor_fire_features). Refitting these same params unchanged on
+# the resulting 13-column set was a huge, real jump (test PR-AUC 0.0106 -> 0.373, top-10% capture
+# 71.9% -> 86.0%), independently confirmed by a freshly GPU-tuned XGBoost on the same 13 columns
+# landing at a similar order of magnitude (test PR-AUC 0.372, top-10% capture 86.4%) — not a
+# single-model quirk. Params themselves weren't re-tuned against the new feature (that would mean
+# re-running tune_model/tune_random_search, still a possible future refinement, but the gain is
+# large enough on the existing params alone that waiting on a wider search wasn't necessary to
+# justify promoting). **Breaks /predict/live** — see docs/07-serving.md's live-weather section;
+# accepted deliberately, matching the cape/convective_precip_mm "dormant limitation" pattern.
 BEST_RANDOM_FOREST_PARAMS = {
     "n_estimators": 238,
     "max_depth": 6,

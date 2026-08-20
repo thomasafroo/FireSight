@@ -3,6 +3,7 @@ import pandas as pd
 
 from firesight.features.engineering import (
     add_days_since_rain,
+    add_neighbor_fire_features,
     add_relative_humidity,
     add_rolling_features,
     add_wind_features,
@@ -81,11 +82,44 @@ def test_add_rolling_features_needs_full_window():
     assert result["t2m_mean_7d"].iloc[6] == 290.0
 
 
+def test_add_neighbor_fire_features_counts_only_moore_neighbors_strictly_prior_day():
+    # 3x3 grid ("0_0".."2_2") plus one isolated cell far outside it ("5_5"), 4 days.
+    grid_cells = [f"{r}_{c}" for r in range(3) for c in range(3)]
+    cells = grid_cells + ["5_5"]
+    dates = pd.date_range("2021-06-01", periods=4)
+    df = pd.DataFrame(
+        [{"cell_id": cell, "date": date, "ignited": 0} for date in dates for cell in cells]
+    )
+    # "0_0" (a Moore neighbor of center "1_1") and isolated "5_5" both ignite on day 1 (index 1).
+    df.loc[(df["cell_id"] == "0_0") & (df["date"] == dates[1]), "ignited"] = 1
+    df.loc[(df["cell_id"] == "5_5") & (df["date"] == dates[1]), "ignited"] = 1
+
+    result = add_neighbor_fire_features(df, windows=(1,))
+
+    def count(cell: str, date) -> float:
+        return result.loc[(result["cell_id"] == cell) & (result["date"] == date), "neighbor_fire_count_1d"].item()
+
+    # day 0: shifted panel has no prior day yet -> NaN (insufficient history), for every cell.
+    assert pd.isna(count("1_1", dates[0]))
+    # day 1: still only sees day 0's (all-zero) ignitions -> 0.
+    assert count("1_1", dates[1]) == 0
+    # day 2: "1_1"'s neighbor "0_0" ignited on day 1 -> counted.
+    assert count("1_1", dates[2]) == 1
+    # "2_2" is the diagonally opposite corner from "0_0" -> not a Moore neighbor -> unaffected.
+    assert count("2_2", dates[2]) == 0
+    # the isolated cell has no neighbors in this panel at all -> always 0, its own fire doesn't
+    # count towards itself.
+    assert count("5_5", dates[2]) == 0
+    # day 2 is later than day 1 by only one day, so "1_1"'s own same-day (day 1) neighbor status
+    # must not leak into day 1's own count (checked above: count("1_1", dates[1]) == 0 despite
+    # "0_0" not having ignited yet on day 1 itself, confirming no same-day leakage either way).
+
+
 def test_engineer_features_end_to_end_and_drop_incomplete_history():
     n = 40
     df = pd.DataFrame(
         {
-            "cell_id": ["a"] * n,
+            "cell_id": ["10_20"] * n,
             "date": pd.date_range("2021-01-01", periods=n),
             "t2m": np.linspace(270, 290, n),
             "d2m": np.linspace(260, 275, n),
@@ -113,9 +147,14 @@ def test_engineer_features_end_to_end_and_drop_incomplete_history():
         "t2m_mean_7d",
         "t2m_trend_7d",
         "rh_mean_7d",
+        "neighbor_fire_count_1d",
+        "neighbor_fire_count_3d",
+        "neighbor_fire_count_7d",
     ]
     complete = drop_incomplete_history(engineered, columns=weather_derived_columns)
-    # first 29 rows lack a full 30-day window -> dropped
+    # first 29 rows lack a full 30-day window -> dropped (precip_30d is still the binding
+    # constraint here: this single-cell frame has no neighbors, so neighbor_fire_count_7d's own
+    # warm-up is only 7 rows, well inside the 29 precip_30d already requires).
     assert len(complete) == n - 29
     assert complete[weather_derived_columns].isna().sum().sum() == 0
 
@@ -136,6 +175,9 @@ def test_drop_incomplete_history_defaults_also_enforce_cape_completeness():
             "t2m_mean_7d": [1.0, 2.0],
             "t2m_trend_7d": [1.0, 2.0],
             "rh_mean_7d": [1.0, 2.0],
+            "neighbor_fire_count_1d": [0.0, 0.0],
+            "neighbor_fire_count_3d": [0.0, 0.0],
+            "neighbor_fire_count_7d": [0.0, 0.0],
             "cape": [100.0, np.nan],
             "convective_precip_mm": [0.0, 0.0],
         }
