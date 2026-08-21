@@ -48,6 +48,19 @@ def assign_cell_ids(
     return df
 
 
+def neighbor_cell_ids(cell_id: str) -> list[str]:
+    """The up to 8 Moore neighbors of a cell, from its "{row}_{col}" id.
+
+    Same offset scheme as `features/engineering.py::_moore_neighbor_adjacency` (duplicated rather
+    than imported, to avoid a features/engineering.py <-> features/live_fire.py cross-dependency for
+    one small helper). Doesn't check whether a neighbor id actually exists in the grid; callers that
+    care (e.g. filtering fetched detections down to real neighbors) do that themselves.
+    """
+    row, col = (int(v) for v in cell_id.split("_", 1))
+    offsets = [(dr, dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if (dr, dc) != (0, 0)]
+    return [f"{row + dr}_{col + dc}" for dr, dc in offsets]
+
+
 def build_grid_cells(
     bbox: str,
     cell_size_km: float = 5.0,

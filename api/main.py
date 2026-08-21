@@ -6,9 +6,10 @@ Three endpoints:
   features. Does *not* fetch live weather or run feature engineering
   itself; the caller supplies feature values directly.
 - GET /predict/live — score a grid cell's *current* conditions by
-  fetching recent weather from Open-Meteo and running it through the
-  same feature-engineering pipeline training uses — see
-  features/live_weather.py and docs/07-serving.md.
+  fetching recent weather from Open-Meteo and recent neighbor-cell fire
+  detections from FIRMS NRT, running both through the same feature-
+  engineering the training pipeline uses — see features/live_weather.py,
+  features/live_fire.py, and docs/07-serving.md.
 - GET /risk-map — a historical demo endpoint: for a date already in the
   processed dataset, returns every cell's predicted risk *and* the
   actual recorded label, so the frontend risk map has something real to
@@ -30,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, create_model
 
 from firesight.features.grid import build_grid_cells
+from firesight.features.live_fire import build_live_neighbor_fire_features
 from firesight.features.live_weather import build_live_feature_row
 from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
 from firesight.training.baseline import (
@@ -162,12 +164,13 @@ def predict_live(
     cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
     date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
 ) -> dict[str, Any]:
-    """Score a grid cell's *current* conditions via a live weather feed, not historical replay.
+    """Score a grid cell's *current* conditions via live feeds, not historical replay.
 
     Unlike /predict (which requires the caller to already have computed
-    feature values) this fetches recent weather itself from Open-Meteo and
-    runs it through the same feature-engineering functions training uses —
-    see features/live_weather.py and docs/07-serving.md.
+    feature values) this fetches recent weather from Open-Meteo and recent
+    neighbor-cell fire detections from FIRMS NRT itself, then runs both
+    through the same feature-engineering functions training uses — see
+    features/live_weather.py, features/live_fire.py, and docs/07-serving.md.
     """
     grid_cells: pd.DataFrame = state["grid_cells"]
     cell = grid_cells[grid_cells["cell_id"] == cell_id]
@@ -186,8 +189,9 @@ def predict_live(
 
     try:
         features = build_live_feature_row(latitude, longitude, target_date, cell_id)
+        features.update(build_live_neighbor_fire_features(cell_id, target_date, BC_KAMLOOPS_BBOX))
     except requests.exceptions.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Live weather fetch failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Live data fetch failed: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -199,6 +203,7 @@ def predict_live(
         "ignition_probability": bundle.predict_proba(features),
         "calibrated_probability": bundle.predict_calibrated_proba(features),
         "weather_source": "open-meteo archive API (ERA5-based reanalysis + near-real-time blend)",
+        "fire_detection_source": "NASA FIRMS NRT (VIIRS_NOAA20_NRT)",
     }
 
 

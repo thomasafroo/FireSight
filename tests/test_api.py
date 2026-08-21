@@ -113,14 +113,27 @@ def test_predict_rejects_missing_feature(client):
     assert response.status_code == 422
 
 
-def test_predict_live_returns_a_probability_for_a_valid_cell(client, monkeypatch):
-    import api.main as main_module
-
+def _patch_live_fetches(monkeypatch, main_module, neighbor_counts: dict | None = None) -> None:
+    """Both /predict/live data sources are real network calls (Open-Meteo, FIRMS NRT) — every test
+    that reaches the try block below the cell/date validation must stub both, or it'll try to hit
+    the live internet during `pytest`."""
     monkeypatch.setattr(
         main_module,
         "build_live_feature_row",
         lambda latitude, longitude, target_date, cell_id: {"t2m": 300.0, "precip_mm": 0.0},
     )
+    monkeypatch.setattr(
+        main_module,
+        "build_live_neighbor_fire_features",
+        lambda cell_id, target_date, bbox: neighbor_counts
+        or {"neighbor_fire_count_1d": 0.0, "neighbor_fire_count_3d": 0.0, "neighbor_fire_count_7d": 0.0},
+    )
+
+
+def test_predict_live_returns_a_probability_for_a_valid_cell(client, monkeypatch):
+    import api.main as main_module
+
+    _patch_live_fetches(monkeypatch, main_module)
     response = client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
     assert response.status_code == 200
     body = response.json()
@@ -128,21 +141,54 @@ def test_predict_live_returns_a_probability_for_a_valid_cell(client, monkeypatch
     assert body["date"] == "2024-07-15"
     assert 0.0 <= body["ignition_probability"] <= 1.0
     assert body["calibrated_probability"] is None
+    assert body["fire_detection_source"] == "NASA FIRMS NRT (VIIRS_NOAA20_NRT)"
 
 
 def test_predict_live_returns_a_calibrated_probability_when_a_calibrator_is_attached(calibrated_client, monkeypatch):
     import api.main as main_module
 
-    monkeypatch.setattr(
-        main_module,
-        "build_live_feature_row",
-        lambda latitude, longitude, target_date, cell_id: {"t2m": 300.0, "precip_mm": 0.0},
-    )
+    _patch_live_fetches(monkeypatch, main_module)
     response = calibrated_client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
     assert response.status_code == 200
     body = response.json()
     assert body["calibrated_probability"] is not None
     assert 0.0 <= body["calibrated_probability"] <= 1.0
+
+
+def test_predict_live_merges_neighbor_fire_counts_into_the_scored_feature_row(tmp_path, monkeypatch):
+    """A dedicated bundle whose feature list actually includes neighbor_fire_count_1d, so a bug that
+    dropped the merged-in fire-detection features (as opposed to just weather) would fail loudly
+    instead of passing silently the way the FEATURES=["t2m", "precip_mm"] fixture above would let it."""
+    train = pd.DataFrame(
+        {
+            "t2m": [270.0, 300.0, 271.0, 299.0],
+            "neighbor_fire_count_1d": [0.0, 4.0, 0.0, 3.0],
+            "y": [0, 1, 0, 1],
+        }
+    )
+    features = ["t2m", "neighbor_fire_count_1d"]
+    model = LogisticRegression().fit(train[features], train["y"])
+    bundle = ModelBundle(model=model, feature_columns=features, metadata={"model_type": "LogisticRegression"})
+    model_path = tmp_path / "model.joblib"
+    save_model_bundle(bundle, model_path)
+    monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    monkeypatch.delenv("FIRESIGHT_DATASET_PATH", raising=False)
+
+    import importlib
+
+    import api.main as main_module
+
+    importlib.reload(main_module)
+    with TestClient(main_module.app) as test_client:
+        monkeypatch.setattr(main_module, "build_live_feature_row", lambda latitude, longitude, target_date, cell_id: {"t2m": 300.0})
+        monkeypatch.setattr(
+            main_module,
+            "build_live_neighbor_fire_features",
+            lambda cell_id, target_date, bbox: {"neighbor_fire_count_1d": 4.0},
+        )
+        response = test_client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 200
+    assert 0.0 <= response.json()["ignition_probability"] <= 1.0
 
 
 def test_predict_live_404s_for_an_unknown_cell(client):
@@ -180,6 +226,25 @@ def test_predict_live_surfaces_a_weather_fetch_failure_as_a_502(client, monkeypa
         raise requests.exceptions.ConnectionError("network unreachable")
 
     monkeypatch.setattr(main_module, "build_live_feature_row", _raise)
+    response = client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 502
+
+
+def test_predict_live_surfaces_a_fire_detection_fetch_failure_as_a_502(client, monkeypatch):
+    """The FIRMS NRT fetch is the second live data source in the same try block as weather — needs
+    its own failure-path test, not just weather's, since a bug could catch one and miss the other."""
+    import api.main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "build_live_feature_row",
+        lambda latitude, longitude, target_date, cell_id: {"t2m": 300.0, "precip_mm": 0.0},
+    )
+
+    def _raise(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("network unreachable")
+
+    monkeypatch.setattr(main_module, "build_live_neighbor_fire_features", _raise)
     response = client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
     assert response.status_code == 502
 

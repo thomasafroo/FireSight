@@ -59,7 +59,7 @@ repeating here with the mechanics: `training/baseline.py` currently implements `
 (`DummyClassifier`) and `fit_logistic_regression()` (`LogisticRegression`), in that order, before
 anything more complex.
 
-**`DummyClassifier(strategy="stratified")`** doesn't look at the features at all — it predicts by
+`DummyClassifier(strategy="stratified")` doesn't look at the features at all — it predicts by
 randomly sampling from the *training* label distribution (so with a 0.16% positive rate, it predicts
 positive about 0.16% of the time, at random). Its purpose isn't to be a good model; it's a
 **floor**. If a real model can't beat this, the pipeline has a bug somewhere upstream (label leakage
@@ -67,7 +67,7 @@ the wrong direction, a broken join, features that don't actually vary with the t
 of model sophistication fixes a broken input, so this check has to happen before investing in a
 fancier model.
 
-**`LogisticRegression(class_weight="balanced")`** — the first model that actually uses the features.
+`LogisticRegression(class_weight="balanced")` — the first model that actually uses the features.
 `class_weight="balanced"` matters a lot here: by default, a classifier trained on 0.16%-positive
 data will often just learn to predict "negative" for everything, since that already gets it 99.84%
 training accuracy with near-zero loss contribution from the rare positives.
@@ -98,7 +98,7 @@ model.fit(train[FEATURE_COLUMNS], train[LABEL_COLUMN])
 A plain `Pipeline`, not a `ColumnTransformer`, in the end — see below for why. A few things worth
 being explicit about:
 
-- **No `ColumnTransformer` needed at all, in the end.** Every feature that made it into
+- **No** `ColumnTransformer` **needed at all, in the end.** Every feature that made it into
 `FEATURE_COLUMNS` is numeric (temperature, soil moisture, precipitation, wind speed,
 days-since-rain, etc.) — there's no categorical column to route separately, so a single
 `StandardScaler` applied to everything is enough; `ColumnTransformer` only earns its keep once
@@ -137,10 +137,12 @@ positives; val 2023: 527k rows, 1,135 positives; test 2024: 527k rows, 397 posit
 positive count *drops* year over year here, consistent with 2023/2024 being quieter BC fire seasons
 than the catastrophic 2021 season sitting in train) and scores both baselines on val:
 
-| model | PR-AUC | ROC-AUC | top-10% capture |
-|---|---|---|---|
-| `DummyClassifier` | 0.0022 | 0.501 | 5.0% |
-| `LogisticRegression` (class-weighted) | 0.0064 | 0.729 | 40.4% |
+
+| model                                 | PR-AUC | ROC-AUC | top-10% capture |
+| ------------------------------------- | ------ | ------- | --------------- |
+| `DummyClassifier`                     | 0.0022 | 0.501   | 5.0%            |
+| `LogisticRegression` (class-weighted) | 0.0064 | 0.729   | 40.4%           |
+
 
 The dummy floor lands almost exactly at the base rate (~0.0022, matching 2023's ~0.22% positive
 rate) and chance ROC-AUC (0.5) — as expected, since it ignores the features entirely. Logistic
@@ -164,18 +166,20 @@ why a manual loop over the fixed temporal val split is used instead of
 random-split leakage `temporal_split` exists to prevent). Both models get the same class-imbalance
 correction in spirit as `LogisticRegression`'s `class_weight="balanced"`: `RandomForestClassifier`
 takes the same `class_weight="balanced"` param directly; `XGBClassifier` has no such param, so
-`fit_xgboost` computes the equivalent [`scale_pos_weight`](glossary.md#scale_pos_weight)
+`fit_xgboost` computes the equivalent `[scale_pos_weight](glossary.md#scale_pos_weight)`
 `= negative_count / positive_count` from the *training fold specifically* each time (recomputed, not
 hardcoded, so it can never leak val/test's class balance into the correction).
 
 Best of each grid, by val (2023) PR-AUC — the primary metric — with their 2024 test scores alongside
 (test was never used for tuning, purely a final honest read):
 
-| model | params | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
-|---|---|---|---|---|---|---|---|
-| `LogisticRegression` | class-weighted | 0.0064 | 0.729 | 40.4% | — | — | — |
-| `RandomForest` | 400 trees, depth 8, min_leaf 5 | 0.0081 | 0.808 | 43.9% | 0.0054 | 0.813 | 55.4% |
-| `XGBoost` | 200 trees, depth 4, lr 0.05 | **0.0083** | 0.805 | **45.1%** | **0.0057** | 0.794 | 49.6% |
+
+| model                | params                         | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+| -------------------- | ------------------------------ | ---------- | ----------- | ----------- | ----------- | ------------ | ------------ |
+| `LogisticRegression` | class-weighted                 | 0.0064     | 0.729       | 40.4%       | —           | —            | —            |
+| `RandomForest`       | 400 trees, depth 8, min_leaf 5 | 0.0081     | 0.808       | 43.9%       | 0.0054      | 0.813        | 55.4%        |
+| `XGBoost`            | 200 trees, depth 4, lr 0.05    | **0.0083** | 0.805       | **45.1%**   | **0.0057**  | 0.794        | 49.6%        |
+
 
 Both tree models clear `LogisticRegression` by a solid margin on every val metric, confirming the
 extra complexity earns its keep here (see
@@ -202,7 +206,7 @@ rather than generalizable fire-weather structure, so shallower trees regularize 
 The grids above are deliberately small (8 candidates each) — a first tuning pass, not an exhaustive
 one. The reason `tune_model` avoids `GridSearchCV` is its *default* cross-validation, which reshuffles
 data into random folds and would reintroduce the same leakage `temporal_split` exists to prevent —
-but that only rules out the default, not the tool. [`PredefinedSplit`](glossary.md#predefinedsplit)
+but that only rules out the default, not the tool. `[PredefinedSplit](glossary.md#predefinedsplit)`
 lets you hand `RandomizedSearchCV`/`GridSearchCV` the *exact* existing train/val split (`test_fold`:
 `-1` for every train row, `0` for every val row) instead of letting it invent folds, so the same
 temporal-safety guarantee holds while gaining `RandomizedSearchCV`'s ability to sample a much wider,
@@ -218,12 +222,14 @@ wider distributions (`RANDOM_FOREST_DISTRIBUTIONS`, `XGBOOST_DISTRIBUTIONS`) add
 grids never searched at all — `max_features` for RandomForest, `subsample`/`colsample_bytree`/
 `reg_alpha`/`reg_lambda` for XGBoost — sampled 15 times each:
 
-| model | params | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
-|---|---|---|---|---|---|---|---|
-| `RandomForest` (grid) | 400 trees, depth 8, min_leaf 5 | 0.0081 | 0.808 | 43.9% | 0.0054 | 0.813 | 55.4% |
-| `XGBoost` (grid) | 200 trees, depth 4, lr 0.05 | 0.0083 | 0.805 | 45.1% | 0.0057 | 0.794 | 49.6% |
-| `RandomForest` (random search) | 181 trees, depth 5, max_features 0.40, min_leaf 1 | 0.0092 | **0.817** | 50.4% | **0.0058** | **0.809** | **59.7%** |
-| `XGBoost` (random search) | 131 trees, depth 3, lr 0.016, subsample 0.67, colsample 0.86 | **0.0093** | 0.811 | **52.5%** | 0.0054 | 0.803 | 59.4% |
+
+| model                          | params                                                       | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+| ------------------------------ | ------------------------------------------------------------ | ---------- | ----------- | ----------- | ----------- | ------------ | ------------ |
+| `RandomForest` (grid)          | 400 trees, depth 8, min_leaf 5                               | 0.0081     | 0.808       | 43.9%       | 0.0054      | 0.813        | 55.4%        |
+| `XGBoost` (grid)               | 200 trees, depth 4, lr 0.05                                  | 0.0083     | 0.805       | 45.1%       | 0.0057      | 0.794        | 49.6%        |
+| `RandomForest` (random search) | 181 trees, depth 5, max_features 0.40, min_leaf 1            | 0.0092     | **0.817**   | 50.4%       | **0.0058**  | **0.809**    | **59.7%**    |
+| `XGBoost` (random search)      | 131 trees, depth 3, lr 0.016, subsample 0.67, colsample 0.86 | **0.0093** | 0.811       | **52.5%**   | 0.0054      | 0.803        | 59.4%        |
+
 
 Both widened models clear their own grid-search counterparts by a wide margin on every val metric,
 and both post a large top-10% capture gain on the untouched test set (55.4%/49.6% -> 59.7%/59.4%) —
@@ -254,12 +260,14 @@ to 2012 (from 2018) for more training rows — `train` now covers 2012-2022 inst
 small hand-written grids) and `tune_random_search` (the wider `RandomizedSearchCV`+`PredefinedSplit`
 search) were re-run against this new scope:
 
-| model | params | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
-|---|---|---|---|---|---|---|---|
-| `RandomForest` (grid) | 200 trees, depth 16, min_leaf 5 | **0.0150** | 0.795 | 39.5% | 0.0102 | 0.878 | 69.4% |
-| `XGBoost` (grid) | 200 trees, depth 6, lr 0.1 | 0.0144 | 0.785 | 36.5% | 0.0088 | 0.876 | 64.5% |
-| `RandomForest` (random search) | 238 trees, depth 6, max_features 0.606, min_leaf 7 | 0.0138 | 0.832 | 41.9% | **0.0106** | **0.884** | **71.9%** |
-| `XGBoost` (random search) | 162 trees, depth 5, lr 0.015, subsample 0.88, colsample 0.72 | 0.0135 | 0.827 | 41.4% | 0.0081 | 0.882 | 69.0% |
+
+| model                          | params                                                       | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+| ------------------------------ | ------------------------------------------------------------ | ---------- | ----------- | ----------- | ----------- | ------------ | ------------ |
+| `RandomForest` (grid)          | 200 trees, depth 16, min_leaf 5                              | **0.0150** | 0.795       | 39.5%       | 0.0102      | 0.878        | 69.4%        |
+| `XGBoost` (grid)               | 200 trees, depth 6, lr 0.1                                   | 0.0144     | 0.785       | 36.5%       | 0.0088      | 0.876        | 64.5%        |
+| `RandomForest` (random search) | 238 trees, depth 6, max_features 0.606, min_leaf 7           | 0.0138     | 0.832       | 41.9%       | **0.0106**  | **0.884**    | **71.9%**    |
+| `XGBoost` (random search)      | 162 trees, depth 5, lr 0.015, subsample 0.88, colsample 0.72 | 0.0135     | 0.827       | 41.4%       | 0.0081      | 0.882        | 69.0%        |
+
 
 The same pattern as the earlier widening-the-search result repeats: grid-search RandomForest narrowly
 wins on val PR-AUC, but the randomized-search RandomForest wins on **every** test metric (PR-AUC,
@@ -288,14 +296,16 @@ checking with the same tool that originally surfaced the winter blind spot: a mo
 which fires the served model's own top-10%-by-risk cutoff catches vs. misses, run separately on val
 (2023) and test (2024) under the current fire-season scoping.
 
+
 | month | val (2023) caught/total | val capture | test (2024) caught/total | test capture |
-|---|---|---|---|---|
-| May | 0/4 | 0% | 0/6 | 0% |
-| Jun | 0/6 | 0% | — | — |
-| Jul | 47/101 | 46.5% | 102/120 | 85.0% |
-| Aug | 282/538 | 52.4% | 72/111 | 64.9% |
-| Sep | 7/153 | 4.6% | — | — |
-| Oct | — | — | 0/5 | 0% |
+| ----- | ----------------------- | ----------- | ------------------------ | ------------ |
+| May   | 0/4                     | 0%          | 0/6                      | 0%           |
+| Jun   | 0/6                     | 0%          | —                        | —            |
+| Jul   | 47/101                  | 46.5%       | 102/120                  | 85.0%        |
+| Aug   | 282/538                 | 52.4%       | 72/111                   | 64.9%        |
+| Sep   | 7/153                   | 4.6%        | —                        | —            |
+| Oct   | —                       | —           | 0/5                      | 0%           |
+
 
 The gap isn't a val-vs-test modeling artifact — it's a **fire-count distribution difference between
 the two specific years landing on a month the model is already comparatively weak at**. Val (2023)
@@ -329,16 +339,18 @@ from "would retuning help"), refit on an **expanding** training window (2012 thr
 score against each subsequent year N in turn, for N = 2017..2024 (2012-2016 reserved as a five-year
 floor before the first holdout, so the earliest fold isn't evaluating off a single year of history).
 
+
 | year | train rows | holdout positives | PR-AUC | ROC-AUC | top-10% capture |
-|---|---|---|---|---|---|
-| 2017 | 1,212,120 | 1,433 | 0.0141 | 0.763 | 30.8% |
-| 2018 | 1,454,544 | 229 | 0.0023 | 0.762 | 25.3% |
-| 2019 | 1,696,968 | 57 | 0.0004 | 0.623 | 22.8% |
-| 2020 | 1,939,392 | 43 | 0.0003 | 0.653 | 16.3% |
-| 2021 | 2,181,816 | 2,628 | 0.0333 | 0.829 | 27.0% |
-| 2022 | 2,424,240 | 98 | 0.0005 | 0.632 | **8.2%** |
-| 2023 | 2,666,664 | 802 | 0.0136 | 0.833 | 41.8% |
-| 2024 | 2,909,088 | 242 | 0.0113 | 0.884 | **74.4%** |
+| ---- | ---------- | ----------------- | ------ | ------- | --------------- |
+| 2017 | 1,212,120  | 1,433             | 0.0141 | 0.763   | 30.8%           |
+| 2018 | 1,454,544  | 229               | 0.0023 | 0.762   | 25.3%           |
+| 2019 | 1,696,968  | 57                | 0.0004 | 0.623   | 22.8%           |
+| 2020 | 1,939,392  | 43                | 0.0003 | 0.653   | 16.3%           |
+| 2021 | 2,181,816  | 2,628             | 0.0333 | 0.829   | 27.0%           |
+| 2022 | 2,424,240  | 98                | 0.0005 | 0.632   | **8.2%**        |
+| 2023 | 2,666,664  | 802               | 0.0136 | 0.833   | 41.8%           |
+| 2024 | 2,909,088  | 242               | 0.0113 | 0.884   | **74.4%**       |
+
 
 **Sanity check first:** the 2023 row (train on everything before 2023) reproduces the original `val`
 numbers from [Re-tuning after the fire-season scope
@@ -390,20 +402,21 @@ certain, and much more year-dependent, than a single test-set number could show.
 The [backtest above](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset)'s leading
 hypothesis — that a year's score depends on *when in the season* its fires land — was only tested
 informally on two years so far ([Investigating the val/test
-gap](#investigating-the-valtest-gap-a-monthly-breakdown)). `evaluation/backtest.py::
-monthly_capture_breakdown` generalizes that by-hand table to every one of the 8 rolling-origin folds,
+gap](#investigating-the-valtest-gap-a-monthly-breakdown)). `evaluation/backtest.py:: monthly_capture_breakdown` generalizes that by-hand table to every one of the 8 rolling-origin folds,
 using the exact same top-10%-by-risk cutoff `top_10pct_capture` scores against, broken down by month.
 
 **Pooled across all 8 years, the month-level pattern is unambiguous and consistent:**
 
+
 | month | fires (8 years pooled) | caught | capture rate |
-|---|---|---|---|
-| May | 53 | 2 | **3.8%** |
-| Jun | 45 | 19 | 42.2% |
-| Jul | 2,289 | 903 | 39.4% |
-| Aug | 2,522 | 712 | 28.2% |
-| Sep | 409 | 90 | 22.0% |
-| Oct | 214 | 27 | **12.6%** |
+| ----- | ---------------------- | ------ | ------------ |
+| May   | 53                     | 2      | **3.8%**     |
+| Jun   | 45                     | 19     | 42.2%        |
+| Jul   | 2,289                  | 903    | 39.4%        |
+| Aug   | 2,522                  | 712    | 28.2%        |
+| Sep   | 409                    | 90     | 22.0%        |
+| Oct   | 214                    | 27     | **12.6%**    |
+
 
 May is by far the weakest month in the entire fire-season window — worse, in relative terms, than the
 already-documented September weakness — despite being included as "in season." October is the second
@@ -417,16 +430,18 @@ each year by the *share* of its fires that landed in Jul/Aug (the two strongest 
 overall `top_10pct_capture` gives a correlation of **r = 0.63** across the 8 folds — real and positive,
 but far from a complete explanation:
 
+
 | year | % of that year's fires in Jul/Aug | top-10% capture |
-|---|---|---|
-| 2019 | 3.5% | 22.8% |
-| 2020 | 32.6% | 16.3% |
-| 2022 | 34.7% | 8.2% |
-| 2018 | 39.3% | 25.3% |
-| 2023 | 79.7% | 41.8% |
-| 2017 | 87.4% | **30.8%** |
-| 2021 | 97.0% | **27.0%** |
-| 2024 | 95.5% | 74.4% |
+| ---- | --------------------------------- | --------------- |
+| 2019 | 3.5%                              | 22.8%           |
+| 2020 | 32.6%                             | 16.3%           |
+| 2022 | 34.7%                             | 8.2%            |
+| 2018 | 39.3%                             | 25.3%           |
+| 2023 | 79.7%                             | 41.8%           |
+| 2017 | 87.4%                             | **30.8%**       |
+| 2021 | 97.0%                             | **27.0%**       |
+| 2024 | 95.5%                             | 74.4%           |
+
 
 **2017 and 2021 are the outliers that keep this from being a clean story.** Both had 87-97% of their
 fires in the nominally-strongest months, yet both scored only 27-31% — worse than 2023's 79.7%-in-
@@ -449,11 +464,13 @@ separate, compounding effects, not one:
 **1. Extreme same-day fire counts directly overwhelm the fixed top-10% budget, but only past a
 threshold.** Bucketing each year's fires by how many cells ignited on that exact date:
 
-| year | 1 fire/day | 2-5 | 6-20 | 21-50 | 51-100 | 100+ |
-|---|---|---|---|---|---|---|
-| 2024 (control) | 0% | 38.1% | 83.6% | 80.0% | — | — |
-| 2017 | 7.7% | 20.6% | 33.6% | 31.4% | 23.1% | — |
-| 2021 | 0.0% | 15.2% | 24.2% | **41.5%** | 28.2% | **15.1%** |
+
+| year           | 1 fire/day | 2-5   | 6-20  | 21-50     | 51-100 | 100+      |
+| -------------- | ---------- | ----- | ----- | --------- | ------ | --------- |
+| 2024 (control) | 0%         | 38.1% | 83.6% | 80.0%     | —      | —         |
+| 2017           | 7.7%       | 20.6% | 33.6% | 31.4%     | 23.1%  | —         |
+| 2021           | 0.0%       | 15.2% | 24.2% | **41.5%** | 28.2%  | **15.1%** |
+
 
 In the normal-year control (2024, max 30 same-day fires), capture *rises* with same-day fire count —
 more simultaneous ignitions means a hotter/drier/windier day, exactly the pattern the model is tuned to
@@ -470,11 +487,13 @@ scale (31.4% -> 23.1% from the 21-50 to 51-100 bucket) without ever reaching 202
 **2. The weather-based signal itself is less discriminative in extreme years.** Comparing mean feature
 values between caught and missed fires:
 
-| | 2024 (control): caught vs. missed | 2021: caught vs. missed |
-|---|---|---|
-| `t2m` | 295.2K vs. 289.9K (**5.3K gap**) | 294.6K vs. 293.1K (**1.5K gap**) |
-| `relative_humidity` | 38.6% vs. 54.1% (**15.5pp gap**) | 34.6% vs. 43.3% (**8.7pp gap**) |
-| `swvl1` | 0.171 vs. 0.263 | 0.165 vs. 0.181 |
+
+|                     | 2024 (control): caught vs. missed | 2021: caught vs. missed          |
+| ------------------- | --------------------------------- | -------------------------------- |
+| `t2m`               | 295.2K vs. 289.9K (**5.3K gap**)  | 294.6K vs. 293.1K (**1.5K gap**) |
+| `relative_humidity` | 38.6% vs. 54.1% (**15.5pp gap**)  | 34.6% vs. 43.3% (**8.7pp gap**)  |
+| `swvl1`             | 0.171 vs. 0.263                   | 0.165 vs. 0.181                  |
+
 
 The same "hot+dry gets caught, cool+wet gets missed" direction holds in every year, but the *gap*
 between caught and missed is roughly a third the size in 2021 as in the 2024 control. That's consistent
@@ -499,13 +518,15 @@ actual fires by whether they landed in the model's own top 10% by predicted risk
 `top_10pct_capture` scores against) found the model's overall 59.7% capture rate hides a strong
 seasonal split, not a uniformly-distributed error rate:
 
+
 | month | fires caught (top 10%) | fires missed |
-|---|---|---|
-| Jul | 111 | 9 |
-| Aug | 81 | 30 |
-| Nov | 26 | 33 |
-| Feb | 1 | 31 |
-| Dec | 0 | 23 |
+| ----- | ---------------------- | ------------ |
+| Jul   | 111                    | 9            |
+| Aug   | 81                     | 30           |
+| Nov   | 26                     | 33           |
+| Feb   | 1                      | 31           |
+| Dec   | 0                      | 23           |
+
 
 July/August fires are caught almost perfectly; **December is 0/23 and February is 1/32**. Missed
 fires occur in conditions ~14.5K cooler, 23 percentage points more humid, and after ~5 more recent
@@ -533,12 +554,12 @@ in the first place.
 Two feature-engineering attempts to close this gap were tried and **both failed to move it**:
 
 1. **Calendar features** (`day_of_year_sin`/`cos`, `is_weekend`, an `open_burning_season` flag
-   derived from the Kamloops Fire Centre's typical Category 2/3 burning-prohibition window) — the
+  derived from the Kamloops Fire Centre's typical Category 2/3 burning-prohibition window) — the
    two day-of-year features became the model's top-2 by importance (40% combined, more than soil
    moisture), but December stayed 0/23 and February 1/32 exactly. Test top-10% capture barely moved
    (59.7% -> 60.7%) while val top-10% capture dropped hard (50.4% -> 33.1%).
 2. **Proximity features** (`dist_to_road_km`, `dist_to_place_km`, nearest-neighbor distance from
-   each grid cell to OpenStreetMap roads/populated places, fetched via the Overpass API and joined
+  each grid cell to OpenStreetMap roads/populated places, fetched via the Overpass API and joined
    as static per-cell values) — same result: December 0/23, February 1/32, unchanged. Test top-10%
    capture dropped to 48.9%. A diagnostic refit with much more capacity (uncapped depth, 400 trees,
    run purely to check whether the tuned model's shallow depth was the bottleneck rather than the
@@ -574,41 +595,43 @@ from real fire-weather signal and not from an artifact of the grid, the join, or
 split happens to fall. Two importance measures were compared:
 
 - **Mean decrease in impurity (MDI)** — `rf.feature_importances_`, built into the fitted model. Fast,
-  but biased toward continuous/high-cardinality features and only reflects the training set, so it can
-  overstate a feature the model happened to split on a lot without that split actually helping predict
-  new data.
+but biased toward continuous/high-cardinality features and only reflects the training set, so it can
+overstate a feature the model happened to split on a lot without that split actually helping predict
+new data.
 - **Permutation importance** — `sklearn.inspection.permutation_importance`, computed separately on the
-  2023 val and 2024 test splits (10 repeats each, scored by PR-AUC, the project's primary metric).
-  Shuffling one feature column at a time and measuring how much held-out PR-AUC drops is a more honest
-  measure of what the model actually depends on to generalize, since it's evaluated on data the model
-  never trained on.
+2023 val and 2024 test splits (10 repeats each, scored by PR-AUC, the project's primary metric).
+Shuffling one feature column at a time and measuring how much held-out PR-AUC drops is a more honest
+measure of what the model actually depends on to generalize, since it's evaluated on data the model
+never trained on.
 
 Both agree on the same ranking, which is reassuring — if MDI and permutation importance disagreed
 sharply, that would suggest the model was overfit to training-set idiosyncrasies rather than a real
 pattern:
 
-| feature | MDI | permutation ΔPR-AUC (val) | permutation ΔPR-AUC (test) |
-|---|---|---|---|
-| `swvl1` (soil moisture) | 0.269 | +0.00203 | +0.00308 |
-| `t2m_mean_7d` | 0.224 | +0.00165 | +0.00264 |
-| `precip_30d` | 0.180 | +0.00240 | +0.00322 |
-| `t2m` | 0.112 | +0.00070 | +0.00128 |
-| `rh_mean_7d` | 0.085 | +0.00053 | +0.00052 |
-| `relative_humidity` | 0.040 | +0.00032 | +0.00136 |
-| `precip_mm` | 0.028 | +0.00035 | +0.00004 |
-| `days_since_rain` | 0.015 | +0.00004 | +0.00014 |
-| `precip_7d` | 0.010 | +0.00006 | +0.00004 |
-| `u10`, `v10`, `wind_dir_sin/cos`, `wind_speed`, `d2m`, `t2m_trend_7d` | all <0.01 | ~0 or slightly negative | ~0 or slightly negative |
+
+| feature                                                               | MDI       | permutation ΔPR-AUC (val) | permutation ΔPR-AUC (test) |
+| --------------------------------------------------------------------- | --------- | ------------------------- | -------------------------- |
+| `swvl1` (soil moisture)                                               | 0.269     | +0.00203                  | +0.00308                   |
+| `t2m_mean_7d`                                                         | 0.224     | +0.00165                  | +0.00264                   |
+| `precip_30d`                                                          | 0.180     | +0.00240                  | +0.00322                   |
+| `t2m`                                                                 | 0.112     | +0.00070                  | +0.00128                   |
+| `rh_mean_7d`                                                          | 0.085     | +0.00053                  | +0.00052                   |
+| `relative_humidity`                                                   | 0.040     | +0.00032                  | +0.00136                   |
+| `precip_mm`                                                           | 0.028     | +0.00035                  | +0.00004                   |
+| `days_since_rain`                                                     | 0.015     | +0.00004                  | +0.00014                   |
+| `precip_7d`                                                           | 0.010     | +0.00006                  | +0.00004                   |
+| `u10`, `v10`, `wind_dir_sin/cos`, `wind_speed`, `d2m`, `t2m_trend_7d` | all <0.01 | ~0 or slightly negative   | ~0 or slightly negative    |
+
 
 Two takeaways:
 
 1. **The signal is real, not an artifact.** The top 5 features by both measures — soil moisture,
-   30-day precip, 7-day mean temp, raw temp, 7-day mean humidity — are exactly the slow-moving
+  30-day precip, 7-day mean temp, raw temp, 7-day mean humidity — are exactly the slow-moving
    fuel-dryness indicators a wildfire-weather domain expert would expect to matter most. None of the
    grid/join mechanics (cell geometry, nearest-neighbor weather assignment) show up as unexpectedly
    dominant, which is what a subtle pipeline bug driving the score would look like.
 2. **Wind and the 7-day temp trend are dead weight in this model** — see [Dropping the dead-weight
-   features](#dropping-the-dead-weight-features) below for what was actually done about it.
+  features](#dropping-the-dead-weight-features) below for what was actually done about it.
 
 ## Dropping the dead-weight features
 
@@ -617,23 +640,25 @@ removing anything from `FEATURE_COLUMNS`, permutation importance was re-run from
 *currently served* RandomForest (30 repeats, two random seeds, val and test both) to confirm the
 picture still held:
 
-| feature | val ΔPR-AUC (seed 1) | val ΔPR-AUC (seed 2) | test ΔPR-AUC (seed 1) | test ΔPR-AUC (seed 2) |
-|---|---|---|---|---|
-| `wind_dir_cos` | -0.000068 | -0.000067 | -0.000072 | -0.000072 |
-| `u10` | -0.000323 | -0.000203 | -0.000166 | -0.000076 |
-| `v10` | +0.000004 | +0.000001 | +0.000065 | +0.000072 |
-| `wind_dir_sin` | +0.000555 | +0.000561 | +0.000032 | +0.000052 |
-| `d2m` | +0.000287 | +0.000173 | -0.000339 | -0.000220 |
-| `t2m_trend_7d` | +0.000017 | +0.000006 | +0.000046 | +0.000067 |
-| `wind_speed` | -0.000211 | -0.000092 | **+0.000443** | **+0.000655** |
-| `rh_mean_7d` (kept, for scale) | +0.001161 | +0.001220 | +0.000841 | +0.000956 |
+
+| feature                        | val ΔPR-AUC (seed 1) | val ΔPR-AUC (seed 2) | test ΔPR-AUC (seed 1) | test ΔPR-AUC (seed 2) |
+| ------------------------------ | -------------------- | -------------------- | --------------------- | --------------------- |
+| `wind_dir_cos`                 | -0.000068            | -0.000067            | -0.000072             | -0.000072             |
+| `u10`                          | -0.000323            | -0.000203            | -0.000166             | -0.000076             |
+| `v10`                          | +0.000004            | +0.000001            | +0.000065             | +0.000072             |
+| `wind_dir_sin`                 | +0.000555            | +0.000561            | +0.000032             | +0.000052             |
+| `d2m`                          | +0.000287            | +0.000173            | -0.000339             | -0.000220             |
+| `t2m_trend_7d`                 | +0.000017            | +0.000006            | +0.000046             | +0.000067             |
+| `wind_speed`                   | -0.000211            | -0.000092            | **+0.000443**         | **+0.000655**         |
+| `rh_mean_7d` (kept, for scale) | +0.001161            | +0.001220            | +0.000841             | +0.000956             |
+
 
 `wind_dir_cos`, `u10`, `v10`, `wind_dir_sin`, `d2m`, and `t2m_trend_7d` all confirmed near-zero or
 mixed-sign on both splits, both seeds — none of them cross even 15% of `rh_mean_7d`'s (the weakest
 *kept* feature's) importance on either split, and several are actively negative. These six were
 dropped from `FEATURE_COLUMNS`.
 
-**`wind_speed` was kept, deviating from the original table's grouping.** Fresh evidence shows a real,
+`wind_speed` **was kept, deviating from the original table's grouping.** Fresh evidence shows a real,
 reproducible positive signal on the test split specifically — +0.00044 to +0.00066 across both seeds,
 roughly half of `rh_mean_7d`'s test importance and nowhere near the ~0 cluster the other five sit in —
 even though it's slightly negative on val. Test is the split this project's own methodology treats as
@@ -648,10 +673,12 @@ Refitting `BEST_RANDOM_FOREST_PARAMS` unchanged on the resulting 10-column `FEAT
 `swvl1`, `precip_mm`, `relative_humidity`, `wind_speed`, `days_since_rain`, `precip_7d`, `precip_30d`,
 `t2m_mean_7d`, `rh_mean_7d`) left val/test scores within noise of the 16-column version:
 
-| | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
-|---|---|---|---|---|---|---|
-| 16 columns (before) | 0.0138 | 0.832 | 41.9% | 0.0106 | 0.884 | 71.9% |
-| 10 columns (after) | 0.0136 | 0.833 | 41.8% | 0.0106 | 0.884 | 71.9% |
+
+|                     | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+| ------------------- | ---------- | ----------- | ----------- | ----------- | ------------ | ------------ |
+| 16 columns (before) | 0.0138     | 0.832       | 41.9%       | 0.0106      | 0.884        | 71.9%        |
+| 10 columns (after)  | 0.0136     | 0.833       | 41.8%       | 0.0106      | 0.884        | 71.9%        |
+
 
 Confirms these columns really were dead weight rather than something the tuned hyperparameters
 happened to lean on — dropping them cost nothing measurable. The hyperparameters themselves weren't
@@ -691,12 +718,14 @@ apples-to-apples on identical rows, not just similar ones.
 
 Real result:
 
-| model                      | split      | pr_auc  | roc_auc | top_10pct_capture |
-| --------------------------- | ---------- | ------- | ------- | ------------------ |
-| RandomForest (tuned, same rows) | val (2023)  | **0.0136** | **0.833** | **41.8%** |
-| SequenceCNN                 | val (2023)  | 0.0117  | 0.787   | 37.9%              |
-| RandomForest (tuned, same rows) | test (2024) | **0.0106** | 0.884   | **71.9%**          |
-| SequenceCNN                 | test (2024) | 0.0062  | 0.883   | 68.6%              |
+
+| model                           | split       | pr_auc     | roc_auc   | top_10pct_capture |
+| ------------------------------- | ----------- | ---------- | --------- | ----------------- |
+| RandomForest (tuned, same rows) | val (2023)  | **0.0136** | **0.833** | **41.8%**         |
+| SequenceCNN                     | val (2023)  | 0.0117     | 0.787     | 37.9%             |
+| RandomForest (tuned, same rows) | test (2024) | **0.0106** | 0.884     | **71.9%**         |
+| SequenceCNN                     | test (2024) | 0.0062     | 0.883     | 68.6%             |
+
 
 The RandomForest wins on both splits, on every metric except test ROC-AUC (a near-tie, 0.884 vs.
 0.883) — most clearly on PR-AUC (roughly 1.2-1.7x higher) and top-10%-capture (4-5 points higher on
@@ -731,27 +760,31 @@ calibrated model).
 
 Run against the served model on both held-out splits:
 
-| | brier score | base-rate-only floor | observed positive rate |
-|---|---|---|---|
-| val (2023) | 0.1233 | 0.0033 | 0.33% |
-| test (2024) | 0.0993 | 0.0010 | 0.10% |
+
+|             | brier score | base-rate-only floor | observed positive rate |
+| ----------- | ----------- | -------------------- | ---------------------- |
+| val (2023)  | 0.1233      | 0.0033               | 0.33%                  |
+| test (2024) | 0.0993      | 0.0010               | 0.10%                  |
+
 
 **The served model's Brier score is ~40-100x *worse* (higher) than a trivial model that ignores every
 feature and always predicts the split's true base rate.** That's a real, specific finding, not a
 rounding effect — the reliability table shows exactly why:
 
+
 | val (2023) predicted-probability bin | mean predicted | observed rate |
-|---|---|---|
-| 0.034 - 0.046 | 0.044 | 0.004% |
-| 0.046 - 0.057 | 0.051 | 0.008% |
-| 0.057 - 0.078 | 0.067 | 0.037% |
-| 0.078 - 0.098 | 0.089 | 0.037% |
-| 0.098 - 0.127 | 0.111 | 0.050% |
-| 0.127 - 0.175 | 0.150 | 0.144% |
-| 0.175 - 0.264 | 0.215 | 0.268% |
-| 0.264 - 0.430 | 0.337 | 0.458% |
-| 0.430 - 0.685 | 0.539 | 0.920% |
-| 0.685 - 0.912 (top decile) | 0.852 | 1.382% |
+| ------------------------------------ | -------------- | ------------- |
+| 0.034 - 0.046                        | 0.044          | 0.004%        |
+| 0.046 - 0.057                        | 0.051          | 0.008%        |
+| 0.057 - 0.078                        | 0.067          | 0.037%        |
+| 0.078 - 0.098                        | 0.089          | 0.037%        |
+| 0.098 - 0.127                        | 0.111          | 0.050%        |
+| 0.127 - 0.175                        | 0.150          | 0.144%        |
+| 0.175 - 0.264                        | 0.215          | 0.268%        |
+| 0.264 - 0.430                        | 0.337          | 0.458%        |
+| 0.430 - 0.685                        | 0.539          | 0.920%        |
+| 0.685 - 0.912 (top decile)           | 0.852          | 1.382%        |
+
 
 The top decile — cells the model scores at a mean 85% ignition probability — actually ignites 1.38% of
 the time on val (0.72% on test's equivalent bucket). Every bucket is monotonically ordered correctly
@@ -788,16 +821,18 @@ computes Brier score and a reliability table for each of the same 8 folds, which
 the single val/test calibration numbers above can't: is the *miscalibration factor* at least a stable
 correction to apply, even if ranking performance isn't?
 
+
 | year | positives | brier score | base-rate floor | brier ratio | top-decile mean predicted | top-decile observed | top-decile ratio |
-|---|---|---|---|---|---|---|---|
-| 2017 | 1,433 | 0.2056 | 0.0059 | 35.0x | 0.862 | 1.82% | 47x |
-| 2018 | 229 | 0.0900 | 0.0009 | 95.4x | 0.795 | 0.24% | 332x |
-| 2019 | 57 | 0.0506 | 0.0002 | 215.2x | 0.585 | 0.05% | 1,091x |
-| 2020 | 43 | 0.0868 | 0.0002 | 489.3x | 0.772 | 0.03% | 2,673x |
-| 2021 | 2,628 | 0.1826 | 0.0107 | 17.0x | 0.888 | 2.93% | 30x |
-| 2022 | 98 | 0.1388 | 0.0004 | 343.5x | 0.855 | 0.03% | 2,590x |
-| 2023 | 802 | 0.1233 | 0.0033 | 37.4x | 0.852 | 1.38% | 62x |
-| 2024 | 242 | 0.1048 | 0.0010 | 105.1x | 0.814 | 0.74% | 110x |
+| ---- | --------- | ----------- | --------------- | ----------- | ------------------------- | ------------------- | ---------------- |
+| 2017 | 1,433     | 0.2056      | 0.0059          | 35.0x       | 0.862                     | 1.82%               | 47x              |
+| 2018 | 229       | 0.0900      | 0.0009          | 95.4x       | 0.795                     | 0.24%               | 332x             |
+| 2019 | 57        | 0.0506      | 0.0002          | 215.2x      | 0.585                     | 0.05%               | 1,091x           |
+| 2020 | 43        | 0.0868      | 0.0002          | 489.3x      | 0.772                     | 0.03%               | 2,673x           |
+| 2021 | 2,628     | 0.1826      | 0.0107          | 17.0x       | 0.888                     | 2.93%               | 30x              |
+| 2022 | 98        | 0.1388      | 0.0004          | 343.5x      | 0.855                     | 0.03%               | 2,590x           |
+| 2023 | 802       | 0.1233      | 0.0033          | 37.4x       | 0.852                     | 1.38%               | 62x              |
+| 2024 | 242       | 0.1048      | 0.0010          | 105.1x      | 0.814                     | 0.74%               | 110x             |
+
 
 **No — it's not stable either, and arguably worse than the ranking metric.** The Brier ratio alone
 spans 17x to 489x (a ~29x spread), and the top-decile ratio spans 30x to 2,673x (an ~88x spread) — a
@@ -839,16 +874,18 @@ test of whether pooling generalizes to a year it never saw, not whether it fits 
 on. Two calibration methods are compared: isotonic regression (a flexible monotonic curve) and sigmoid/
 Platt scaling (a single logistic curve) — see `fit_isotonic_calibrator`/`fit_sigmoid_calibrator`.
 
+
 | year | positives | pooled calibration-fit positives | raw Brier | isotonic Brier | sigmoid Brier | raw top-decile ratio | isotonic top-decile ratio | sigmoid top-decile ratio |
-|---|---|---|---|---|---|---|---|---|
-| 2017 | 1,433 | 4,099 | 0.2056 | 0.0059 | 0.0059 | 47.3x | 0.67x | 0.87x |
-| 2018 | 229 | 5,303 | 0.0900 | 0.0010 | 0.0010 | 332.3x | 6.0x | 6.0x |
-| 2019 | 57 | 5,475 | 0.0506 | 0.0002 | 0.0002 | 1,090.8x | 15.7x | 14.2x |
-| 2020 | 43 | 5,489 | 0.0868 | 0.0002 | 0.0002 | 2,673.4x | 45.9x | 46.2x |
-| 2021 | 2,628 | 2,904 | 0.1826 | 0.0107 | 0.0107 | 30.3x | 0.54x | 0.37x |
-| 2022 | 98 | 5,434 | 0.1388 | 0.0004 | 0.0004 | 2,589.7x | 51.1x | 59.9x |
-| 2023 | 802 | 4,730 | 0.1233 | 0.0033 | 0.0033 | 61.6x | 1.27x | 1.25x |
-| 2024 | 242 | 5,290 | 0.1048 | 0.0010 | 0.0010 | 109.6x | 1.96x | 2.08x |
+| ---- | --------- | -------------------------------- | --------- | -------------- | ------------- | -------------------- | ------------------------- | ------------------------ |
+| 2017 | 1,433     | 4,099                            | 0.2056    | 0.0059         | 0.0059        | 47.3x                | 0.67x                     | 0.87x                    |
+| 2018 | 229       | 5,303                            | 0.0900    | 0.0010         | 0.0010        | 332.3x               | 6.0x                      | 6.0x                     |
+| 2019 | 57        | 5,475                            | 0.0506    | 0.0002         | 0.0002        | 1,090.8x             | 15.7x                     | 14.2x                    |
+| 2020 | 43        | 5,489                            | 0.0868    | 0.0002         | 0.0002        | 2,673.4x             | 45.9x                     | 46.2x                    |
+| 2021 | 2,628     | 2,904                            | 0.1826    | 0.0107         | 0.0107        | 30.3x                | 0.54x                     | 0.37x                    |
+| 2022 | 98        | 5,434                            | 0.1388    | 0.0004         | 0.0004        | 2,589.7x             | 51.1x                     | 59.9x                    |
+| 2023 | 802       | 4,730                            | 0.1233    | 0.0033         | 0.0033        | 61.6x                | 1.27x                     | 1.25x                    |
+| 2024 | 242       | 5,290                            | 0.1048    | 0.0010         | 0.0010        | 109.6x               | 1.96x                     | 2.08x                    |
+
 
 (top-decile ratio = mean predicted / observed rate in the top-scored bucket, matching the table above —
 1.0x is perfect; both above and below 1.0x are miscalibrated.)
@@ -858,12 +895,12 @@ instability, it just moves the whole cluster of numbers much closer to correct.*
 not one:
 
 1. **Brier score improves by 15–500x in every single year**, isotonic and sigmoid performing almost
-   identically throughout (no meaningful reason to prefer one over the other here). This is largely
+  identically throughout (no meaningful reason to prefer one over the other here). This is largely
    mechanical, not a deep achievement: Brier score is dominated by the huge majority of true-negative
    rows, and *any* calibration that shrinks scores toward the true ~0.1–0.3% base rate collapses their
    squared error, almost regardless of whether the shrinkage is precisely right for that specific year.
 2. **The top-decile ratio — the number that actually answers "is a highly-scored cell's probability
-   meaningful" — improves in absolute terms in every year (worst case 2,673x → 51x) but the *relative
+  meaningful" — improves in absolute terms in every year (worst case 2,673x → 51x) but the *relative
    spread between the best- and worst-calibrated held-out year barely changes*: ~89x (2,673/30 raw) vs.
    ~95x (51/0.54 isotonic).** Pooling shifts every year's number much closer to 1.0x, but it doesn't make
    the years agree with each other any better than before — the year-to-year instability this whole
@@ -898,16 +935,15 @@ This dev machine has an NVIDIA GPU (RTX 4060 Laptop), which raised the obvious q
 this project's CPU-bound tuning move to it? The honest answer splits by model:
 
 - **XGBoost has native GPU support** — `tree_method="hist", device="cuda"` on the same
-  `XGBClassifier` used everywhere else in this project. No algorithm change, just a device flag.
+`XGBClassifier` used everywhere else in this project. No algorithm change, just a device flag.
 - **RandomForest does not** — `sklearn.ensemble.RandomForestClassifier` has no GPU code path at all.
-  The GPU-accelerated equivalent is RAPIDS' `cuml.ensemble.RandomForestClassifier`, but RAPIDS has
-  never shipped native Windows support (WSL2 only), which is a separate Linux environment, not a
-  package this project's `.venv` can just add. RandomForest tuning stays CPU-only here.
+The GPU-accelerated equivalent is RAPIDS' `cuml.ensemble.RandomForestClassifier`, but RAPIDS has
+never shipped native Windows support (WSL2 only), which is a separate Linux environment, not a
+package this project's `.venv` can just add. RandomForest tuning stays CPU-only here.
 
 **A real driver/CUDA-version mismatch had to be diagnosed and fixed before GPU XGBoost worked at
 all — worth recording the shape of it, not just the fix.** The first attempt looked like it worked
-(no error) but silently trained on CPU: `XGBClassifier(device="cuda").fit(...)` logged `WARNING: No
-visible GPU is found, setting device to CPU`, even though `nvidia-smi` clearly saw the RTX 4060 and
+(no error) but silently trained on CPU: `XGBClassifier(device="cuda").fit(...)` logged `WARNING: No visible GPU is found, setting device to CPU`, even though `nvidia-smi` clearly saw the RTX 4060 and
 `xgboost.build_info()` confirmed the installed wheel was compiled `USE_CUDA: True`. The actual cause
 was a version mismatch one layer down: that wheel (xgboost 3.4.0) was built against **CUDA 13.3**,
 which requires driver ≥590, and the machine's installed driver was 576.52 (good for CUDA up to
@@ -945,10 +981,12 @@ would be pure duplicate work.
 candidates) finished in well under a minute; the CPU RandomForest randomized search run right before
 it in the same session (also 15 candidates, same `tune_random_search` infrastructure) took hours.
 
-| stage | candidates | per-candidate fit time | total (sum of per-candidate times) |
-|---|---|---|---|
-| XGBoost, GPU (`tune_xgboost_gpu.py`) | 15 | 1.2s – 5.1s | ~39s |
-| RandomForest, CPU (`advanced_models.py`) | 15 | 14.1min – 86.1min | ~11.9h (serial sum; real wall-clock was shorter, since several candidates ran concurrently across CPU cores) |
+
+| stage                                    | candidates | per-candidate fit time | total (sum of per-candidate times)                                                                           |
+| ---------------------------------------- | ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| XGBoost, GPU (`tune_xgboost_gpu.py`)     | 15         | 1.2s – 5.1s            | ~39s                                                                                                         |
+| RandomForest, CPU (`advanced_models.py`) | 15         | 14.1min – 86.1min      | ~11.9h (serial sum; real wall-clock was shorter, since several candidates ran concurrently across CPU cores) |
+
 
 **This is not a clean same-algorithm GPU-vs-CPU benchmark, and shouldn't be read as "XGBoost is
 ~1000x faster on this GPU" — say so plainly.** Two different algorithms are being compared (there is
@@ -979,7 +1017,7 @@ work specifically.
 [Weather join](04-weather-join.md#a-second-weather-source-full-era5s-cape-and-convective-precipitation)
 for what they are and why they were fetched) had already been joined into
 `kamloops_dataset.parquet` and enforced for completeness by `drop_incomplete_history`, but were
-**not actually in `FEATURE_COLUMNS`** — no model was training on them. `training/baseline.py` now
+**not actually in** `FEATURE_COLUMNS` — no model was training on them. `training/baseline.py` now
 includes both, added as a pair (matching how they were fetched and engineered together), bringing
 `FEATURE_COLUMNS` to 12 columns.
 
@@ -992,10 +1030,12 @@ the currently-served model from [the fire-season re-tune above](#re-tuning-after
 — same search infrastructure, same `PredefinedSplit`, same train/val/test years, the only difference
 being these two extra columns:
 
-| | params | test PR-AUC | test ROC-AUC | test top-10% capture |
-|---|---|---|---|---|
-| RandomForest, 10 features (served, 2026-08-15) | 238 trees, depth 6, max_features 0.606, min_leaf 7 | **0.0106** | **0.884** | **71.9%** |
-| RandomForest, 12 features incl. cape (2026-08-17) | 438 trees, depth 7, max_features 0.775, min_leaf 8 | 0.00985 | 0.876 | 69.4% |
+
+|                                                   | params                                             | test PR-AUC | test ROC-AUC | test top-10% capture |
+| ------------------------------------------------- | -------------------------------------------------- | ----------- | ------------ | -------------------- |
+| RandomForest, 10 features (served, 2026-08-15)    | 238 trees, depth 6, max_features 0.606, min_leaf 7 | **0.0106**  | **0.884**    | **71.9%**            |
+| RandomForest, 12 features incl. cape (2026-08-17) | 438 trees, depth 7, max_features 0.775, min_leaf 8 | 0.00985     | 0.876        | 69.4%                |
+
 
 Adding `cape`/`convective_precip_mm` did not improve any test-set metric — the 12-feature run is
 slightly **worse** on all three. Worth being precise about what that does and doesn't show: the old
@@ -1072,8 +1112,7 @@ The better-fit hypothesis is **fire-season spread dynamics** instead: a real wil
 growing into adjacent grid cells over consecutive days, which no current model can see. Worth
 checking the winter months anyway since it's cheap, but that's not the expected win.
 
-**Leakage — the one thing that must be gotten exactly right:** only strictly prior-day (`date ≤
-D-1`) neighbor status may be used. Same-day neighbor `ignited` would leak, since one large fire
+**Leakage — the one thing that must be gotten exactly right:** only strictly prior-day (`date ≤ D-1`) neighbor status may be used. Same-day neighbor `ignited` would leak, since one large fire
 spanning multiple grid cells gets detected the same FIRMS day — same-day neighbor status would
 trivially predict the target and wouldn't exist yet at real prediction time. Same lagging discipline
 `days_since_rain`/`precip_7d` already use; the risk is implementing this as a same-day join by
@@ -1117,10 +1156,12 @@ rather than a result confounded by an already-inconclusive pair of columns).
 leakage before being trusted.** Refitting the served model's exact hyperparameters
 (`BEST_RANDOM_FOREST_PARAMS`, unchanged) on the resulting 13-column set:
 
-| | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
-|---|---|---|---|---|---|---|
-| RandomForest, 10 features (served, pre-2026-08-19) | 0.0138 | 0.832 | 41.9% | 0.0106 | 0.884 | 71.9% |
-| RandomForest, 13 features incl. neighbor_fire_count | **0.365** | **0.963** | **90.8%** | **0.373** | **0.951** | **86.0%** |
+
+|                                                     | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
+| --------------------------------------------------- | ---------- | ----------- | ----------- | ----------- | ------------ | ------------ |
+| RandomForest, 10 features (served, pre-2026-08-19)  | 0.0138     | 0.832       | 41.9%       | 0.0106      | 0.884        | 71.9%        |
+| RandomForest, 13 features incl. neighbor_fire_count | **0.365**  | **0.963**   | **90.8%**   | **0.373**   | **0.951**    | **86.0%**    |
+
 
 A freshly GPU-tuned XGBoost (`tune_xgboost_gpu.py`, `XGBOOST_DISTRIBUTIONS`, 15 candidates, same
 13-column set) independently landed at a similar order of magnitude — test PR-AUC 0.372, ROC-AUC
@@ -1135,17 +1176,17 @@ actually-caught) got — internal consistency (no crash, a plausible-looking pat
 correctness. Three checks, not one:
 
 1. **Ignited-rate-by-bucket is monotonic and physically sane**, not a step function that would
-   suggest a same-day identity leak: `neighbor_fire_count_1d = 0` -> 0.04% ignition rate (near the
+  suggest a same-day identity leak: `neighbor_fire_count_1d = 0` -> 0.04% ignition rate (near the
    ~0.15% fire-season base rate); `= 5` -> 68.7%. `neighbor_fire_count_7d` shows the same monotonic
    climb (0.03% at 0 -> 31.4% at 10+).
-2. **A manual per-fire trace against the raw `(cell_id, date, ignited)` rows**, not just the derived
-   column, confirms the shift-then-roll logic: a cell that ignited 2021-08-19 shows
+2. **A manual per-fire trace against the raw** `(cell_id, date, ignited)` **rows**, not just the derived
+  column, confirms the shift-then-roll logic: a cell that ignited 2021-08-19 shows
    `neighbor_fire_count_1d = 1` because a Moore neighbor ignited the prior day (2021-08-18), rising to
    `neighbor_fire_count_3d/7d = 2` as the fire visibly spread across neighboring cells over the
    following days — the feature is tracking real, physical fire spread, not an artifact. A separate
    fire with no local precursor correctly shows all three counts at 0.
 3. **Same-day exclusion holds**: for that same manually-traced fire, the day *before* ignition
-   (2021-08-18, when no neighbor had yet ignited) correctly shows `neighbor_fire_count_1d = 0` — a
+  (2021-08-18, when no neighbor had yet ignited) correctly shows `neighbor_fire_count_1d = 0` — a
    same-day leak would have shown a nonzero count one day earlier than it should.
 
 **Why the effect size makes sense, not just why it isn't a bug:** every prior feature in
@@ -1164,10 +1205,11 @@ hyperparameters, refit on the new 13-column `FEATURE_COLUMNS`; `data/processed/m
 re-exported) on the strength of this measured, leakage-checked, cross-model-family-confirmed win — no
 wider hyperparameter re-tune was run first, since the gain is large enough on the existing params
 alone that waiting on one wasn't necessary to justify promoting (a possible future refinement, not a
-blocker). **This breaks `/predict/live`** — see
-[Serving](07-serving.md#live-weather-for-predictlive) — accepted deliberately, the same "dormant
-limitation" tradeoff already made for `cape`/`convective_precip_mm`, except this one is active
-immediately rather than dormant, since this is the feature set actually being promoted.
+blocker). **This broke** `/predict/live` for about a day — accepted deliberately at the time, the same
+"dormant limitation" tradeoff already made for `cape`/`convective_precip_mm`, except this one was
+active immediately rather than dormant, since this is the feature set actually being promoted. Fixed
+2026-08-20 via a live FIRMS NRT feed — see
+[Serving](07-serving.md#live-weather-for-predictlive) for the full writeup.
 
 ### 2. SHAP explainability
 
@@ -1189,12 +1231,13 @@ flagged risk." A `/predict/explain` live endpoint is technically easy (`shap.Tre
 millisecond-fast per call for a RandomForest this size) but is new API surface with its own contract —
 treat as a follow-up, not bundled into the same change.
 
-**Two real gotchas found in current `shap` docs, both must be handled explicitly, not assumed:**
+**Two real gotchas found in current** `shap` **docs, both must be handled explicitly, not assumed:**
+
 1. Binary-classifier output shape (a list of two arrays vs. a single array) is version/config-
-   dependent — must be verified empirically against the installed `shap` version at implementation
+  dependent — must be verified empirically against the installed `shap` version at implementation
    time.
 2. The default `TreeExplainer` explains the raw tree margin, not calibrated probability. Getting SHAP
-   values that actually sum to `predict_proba`'s output requires `feature_perturbation="interventional"`,
+  values that actually sum to `predict_proba`'s output requires `feature_perturbation="interventional"`,
    `model_output="probability"`, and a background sample. Even then, SHAP can only decompose the
    pre-calibration `ignition_probability` — the attached isotonic
    [calibrator](#does-pooled-leave-one-year-out-validated-calibration-actually-help) is a separate
@@ -1211,13 +1254,13 @@ script precedent). The live-endpoint stage is separate scope, not estimated here
 model (13-column `FEATURE_COLUMNS` including `neighbor_fire_count_{1,3,7}d`, promoted the same day —
 see the previous section). Both gotchas were handled exactly as planned, not assumed:
 
-1. **Output shape, verified against the installed `shap==0.52.0`:** `TreeExplainer(...)` called on a
-   `DataFrame` returns a single `(n_samples, n_features, n_classes)` array — not the "list of two
+1. **Output shape, verified against the installed** `shap==0.52.0`**:** `TreeExplainer(...)` called on a
+  `DataFrame` returns a single `(n_samples, n_features, n_classes)` array — not the "list of two
    arrays" shape some other shap versions/configs use. `_positive_class_explanation` asserts this
    shape and raises loudly rather than silently misreading which slice is the positive class if a
    future shap upgrade changes it again.
-2. **Additivity to `predict_proba`, checked by reconstruction, not assumed:** `explain()` sums each
-   row's SHAP values plus its base value and asserts the result matches `model.predict_proba`'s raw
+2. **Additivity to** `predict_proba`**, checked by reconstruction, not assumed:** `explain()` sums each
+  row's SHAP values plus its base value and asserts the result matches `model.predict_proba`'s raw
    output to `1e-4`, for every call — a broken reconstruction would mean the attributions don't
    actually explain what they claim to. As documented up front, everything below is in raw
    `ignition_probability` units; there is no SHAP decomposition of the isotonic-calibrated
@@ -1229,21 +1272,21 @@ left unexplained.** MDI (see the previous section) put `neighbor_fire_count_7d`/
 total importance combined. Mean |SHAP| over an unbiased 3,000-row random test-set sample tells a
 different-looking story:
 
-| feature | mean \|SHAP\| |
-|---|---|
-| `swvl1` | 0.0267 |
-| `t2m` | 0.0191 |
-| `t2m_mean_7d` | 0.0147 |
-| `precip_mm` | 0.0126 |
-| `rh_mean_7d` | 0.0074 |
-| `neighbor_fire_count_7d` | 0.0058 |
-| `wind_speed` | 0.0052 |
-| `precip_30d` | 0.0051 |
-| `days_since_rain` | 0.0042 |
-| `relative_humidity` | 0.0042 |
-| `precip_7d` | 0.0033 |
-| `neighbor_fire_count_3d` | 0.0008 |
-| `neighbor_fire_count_1d` | 0.0006 |
+| feature                  | mean |SHAP| |
+| ------------------------ | ----------- |
+| `swvl1`                  | 0.0267      |
+| `t2m`                    | 0.0191      |
+| `t2m_mean_7d`            | 0.0147      |
+| `precip_mm`              | 0.0126      |
+| `rh_mean_7d`             | 0.0074      |
+| `neighbor_fire_count_7d` | 0.0058      |
+| `wind_speed`             | 0.0052      |
+| `precip_30d`             | 0.0051      |
+| `days_since_rain`        | 0.0042      |
+| `relative_humidity`      | 0.0042      |
+| `precip_7d`              | 0.0033      |
+| `neighbor_fire_count_3d` | 0.0008      |
+| `neighbor_fire_count_1d` | 0.0006      |
 
 This is a real, non-contradictory disagreement between two honest measures, not a sign either one is
 wrong — checked directly, not just reasoned about: `neighbor_fire_count_7d` is exactly 0 for 98.6% of
@@ -1265,19 +1308,19 @@ exist rather than left to chance — an earlier run of this same script against 
 3,000-row sample happened to contain zero fires at all):
 
 - **A caught fire** (cell `1119_-1711`, 2024-07-20, `ignition_probability=0.997`): `neighbor_fire_count_7d`
-  (+0.517), `_3d` (+0.161), `_1d` (+0.060) are the top three contributors by a wide margin — this
-  fire was flagged almost entirely because it had 11 neighbor ignitions in the trailing week.
+(+0.517), `_3d` (+0.161), `_1d` (+0.060) are the top three contributors by a wide margin — this
+fire was flagged almost entirely because it had 11 neighbor ignitions in the trailing week.
 - **The highest-scored non-fire** (cell `1122_-1713`, 2024-08-06, `ignition_probability=0.995`): the
-  same shape — `neighbor_fire_count_7d` (+0.595), `_3d` (+0.147), `_1d` (+0.072) dominate. This cell
-  sat in the middle of an active nearby cluster and, by the model's own reasoning, looked exactly like
-  the fires around it — a legible, defensible false positive, not an inexplicable one.
+same shape — `neighbor_fire_count_7d` (+0.595), `_3d` (+0.147), `_1d` (+0.072) dominate. This cell
+sat in the middle of an active nearby cluster and, by the model's own reasoning, looked exactly like
+the fires around it — a legible, defensible false positive, not an inexplicable one.
 - **A real missed fire** (cell `1141_-1693`, 2024-07-22, `ignition_probability=0.275`, below the
-  test set's own top-10% cutoff): **no `neighbor_fire_count` feature appears anywhere in its top-6
-  contributions at all.** The drivers are entirely weather (`swvl1` +0.082, `t2m` +0.066,
-  `t2m_mean_7d` +0.060, `wind_speed` -0.039, `relative_humidity` +0.016, `rh_mean_7d` +0.009) — a
-  concrete, individual confirmation of the mechanism proposed when spatial-lag features were first
-  motivated above: a fire with no nearby recent precursor gets scored on weather alone, the same
-  ceiling every purely-weather-driven prediction already had before this feature existed.
+test set's own top-10% cutoff): **no** `neighbor_fire_count` **feature appears anywhere in its top-6
+contributions at all.** The drivers are entirely weather (`swvl1` +0.082, `t2m` +0.066,
+`t2m_mean_7d` +0.060, `wind_speed` -0.039, `relative_humidity` +0.016, `rh_mean_7d` +0.009) — a
+concrete, individual confirmation of the mechanism proposed when spatial-lag features were first
+motivated above: a fire with no nearby recent precursor gets scored on weather alone, the same
+ceiling every purely-weather-driven prediction already had before this feature existed.
 
 Plots (`shap_beeswarm.png` and the three `shap_waterfall_*.png` files above) were saved to
 `data/processed/` (gitignored build output, same as `model.joblib`) rather than committed or embedded
@@ -1330,7 +1373,7 @@ the LOYO check actually confirming value first.
 ### 4. Attention-pooling on the sequence model (a narrower angle than a full Transformer)
 
 See [Testing the sequence-modeling hypothesis](#testing-the-sequence-modeling-hypothesis) and
-[`research/neural-networks.md`](../research/neural-networks.md) for the full context: that experiment
+`[research/neural-networks.md](../research/neural-networks.md)` for the full context: that experiment
 already ran and RandomForest won clearly (test PR-AUC 0.0106 vs. the CNN's 0.0062, top-10% capture
 71.9% vs. 68.6%), and this project has *twice* documented that more model capacity backfires on this
 data (the CNN result, plus an earlier uncapped-depth RandomForest diagnostic that cratered top-10%
@@ -1346,8 +1389,7 @@ averaging, independent of the already-closed raw-sequence-vs-rolling-features qu
 **Interpretability artifact:** for ~8-10 real test-set fires (a mix of catches and misses), plot
 attention weight against day-in-window (1-30) — plus a table of mean attention-by-lag-day across all
 test positives, checking whether the model concentrates near the ignition day or spreads out evenly
-(evenly ≈ learned to reproduce plain averaging, a negative result). Reuses the exact same `temporal_
-split`/`score_sequence_model` harness — only the pooling layer changes, isolating one variable.
+(evenly ≈ learned to reproduce plain averaging, a negative result). Reuses the exact same `temporal_ split`/`score_sequence_model` harness — only the pooling layer changes, isolating one variable.
 
 **Honest framing:** pitched as a cheap (~30-60 min implementation, GPU makes training near-instant),
 low-risk experiment worth running for the interpretability artifact and research completeness — not
