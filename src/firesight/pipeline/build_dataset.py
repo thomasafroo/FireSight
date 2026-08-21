@@ -13,9 +13,16 @@ from pathlib import Path
 import pandas as pd
 
 from firesight.features.convective import load_convective_daily
-from firesight.features.engineering import drop_incomplete_history, engineer_features
+from firesight.features.engineering import (
+    ENGINEERED_COLUMNS,
+    drop_incomplete_history,
+    engineer_features,
+)
+from firesight.features.fuel_type import build_fuel_type_features
+from firesight.features.fwi import compute_fwi
 from firesight.features.grid import assign_cell_ids, build_grid_cells
 from firesight.features.labels import build_label_scaffold, filter_real_fires
+from firesight.features.topography import build_topography_features
 from firesight.features.weather import join_weather, load_era5_daily
 from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
 
@@ -53,7 +60,23 @@ def build(
     joined = join_weather(joined, grid_cells, convective_daily)
 
     engineered = engineer_features(joined)
-    return drop_incomplete_history(engineered)
+    # Needs relative_humidity (engineer_features's add_relative_humidity) already computed, and
+    # grid_cells for per-cell latitude -- doesn't fit engineer_features' plain per-cell-group
+    # signature, so it's a separate step here rather than folded into that pipeline (see
+    # features/fwi.py's module docstring for the recursive day-over-day computation itself).
+    with_fwi = compute_fwi(engineered, grid_cells)
+
+    # Static per-cell terrain (features/topography.py) -- one row per cell, broadcast onto every
+    # date via a plain merge on cell_id, unlike the date-varying joins above.
+    topography = build_topography_features(grid_cells, cell_size_km=cell_size_km)
+    with_topography = with_fwi.merge(topography, on="cell_id", how="left")
+
+    # Static per-cell FBP fuel type (features/fuel_type.py) -- same static-per-cell join shape as
+    # topography above.
+    fuel_type = build_fuel_type_features(grid_cells)
+    with_fuel_type = with_topography.merge(fuel_type, on="cell_id", how="left")
+
+    return drop_incomplete_history(with_fuel_type, columns=ENGINEERED_COLUMNS + list(fuel_type.columns.drop("cell_id")))
 
 
 def sanity_check(df: pd.DataFrame) -> None:

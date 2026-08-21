@@ -77,6 +77,45 @@ def apply_sigmoid_calibrator(calibrator: LogisticRegression, y_score: np.ndarray
     return calibrator.predict_proba(y_score.reshape(-1, 1))[:, 1]
 
 
+def fit_venn_abers_calibrator(y_score: np.ndarray, y_true: np.ndarray):
+    """Fit the low-level `venn_abers.VennAbers` classifier-calibration class on pooled scores.
+
+    Deliberately the *low-level* `VennAbers` class, not the package's `VennAbersCalibrator`
+    wrapper: checked against the library source (not just its README) and confirmed the wrapper
+    does its own random `cal_size` split internally, which would quietly reintroduce the
+    random-split leakage this project's temporal-split discipline (`docs/06-modeling-and-
+    evaluation.md#splitting-by-time-never-randomly`) exists to prevent. The low-level class takes
+    pre-computed calibration-set probabilities/labels directly, so the caller (here, the existing
+    leave-one-year-out rig) controls the split.
+
+    `VennAbers.fit`/`.predict_proba` both want two-column `[P(class=0), P(class=1)]` arrays, not
+    the 1-D positive-class score this project's other calibrators use — reshaped here so callers
+    keep using the same 1-D-score convention as `fit_isotonic_calibrator`/`fit_sigmoid_calibrator`.
+    """
+    from venn_abers import VennAbers
+
+    p_cal = np.column_stack([1 - y_score, y_score])
+    va = VennAbers()
+    va.fit(p_cal, y_true)
+    return va
+
+
+def apply_venn_abers_calibrator(va, y_score: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Calibrated point probability plus multiprobability interval width for `y_score`.
+
+    Returns `(p_prime, interval_width)`: `p_prime` is the calibrated positive-class probability
+    (comparable to isotonic/sigmoid's output), `interval_width` is `p1 - p0` — the size of the
+    `[p0, p1]` interval Venn-Abers brackets that estimate with (arxiv.org/pdf/1511.00213.pdf
+    section 4). A wide interval on a given row is Venn-Abers' own signal that the calibration-set
+    support behind that prediction is thin; this is the number `docs/06`'s Venn-Abers proposal
+    (#3) predicted should track the already-known sparse-year unreliability.
+    """
+    p_test = np.column_stack([1 - y_score, y_score])
+    p_prime, p0_p1 = va.predict_proba(p_test)
+    interval_width = p0_p1[:, 1] - p0_p1[:, 0]
+    return p_prime[:, 1], interval_width
+
+
 def leave_one_year_out_calibration_check(fold_scores: dict[int, tuple[np.ndarray, np.ndarray]]) -> pd.DataFrame:
     """For each year, calibrate on every *other* year pooled together, then score the held-out
     year — the honest test of "does a pooled calibrator generalize to a year it never saw,"
@@ -104,8 +143,10 @@ def leave_one_year_out_calibration_check(fold_scores: dict[int, tuple[np.ndarray
 
         iso = fit_isotonic_calibrator(other_score, other_true)
         sig = fit_sigmoid_calibrator(other_score, other_true)
+        va = fit_venn_abers_calibrator(other_score, other_true)
         iso_score = iso.predict(y_score)
         sig_score = apply_sigmoid_calibrator(sig, y_score)
+        va_score, va_interval_width = apply_venn_abers_calibrator(va, y_score)
 
         rows.append(
             {
@@ -115,9 +156,12 @@ def leave_one_year_out_calibration_check(fold_scores: dict[int, tuple[np.ndarray
                 "raw_brier": brier_score(y_true, y_score),
                 "isotonic_brier": brier_score(y_true, iso_score),
                 "sigmoid_brier": brier_score(y_true, sig_score),
+                "venn_abers_brier": brier_score(y_true, va_score),
                 "raw_top_bin_ratio": top_bin_ratio(y_true, y_score),
                 "isotonic_top_bin_ratio": top_bin_ratio(y_true, iso_score),
                 "sigmoid_top_bin_ratio": top_bin_ratio(y_true, sig_score),
+                "venn_abers_top_bin_ratio": top_bin_ratio(y_true, va_score),
+                "venn_abers_mean_interval_width": float(va_interval_width.mean()),
             }
         )
     return pd.DataFrame(rows)
@@ -161,6 +205,35 @@ if __name__ == "__main__":
     fold_scores = {fold.year: (fold.y_true, fold.y_score) for fold in folds}
     loyo = leave_one_year_out_calibration_check(fold_scores)
     print(loyo.to_string(index=False), flush=True)
+
+    # The real test from docs/06's Venn-Abers proposal (#3): do intervals actually widen honestly
+    # in the years already known least reliable (2019/2020/2022, from the isotonic/sigmoid columns
+    # above), or is the interval claiming false confidence there too? Correlating against 1/positives
+    # (not year identity) lets this hold for whichever years turn out sparse on this feature set,
+    # rather than hardcoding the old weather-only model's specific sparse years.
+    print("\n=== does venn_abers_mean_interval_width track known-sparse-year unreliability? ===", flush=True)
+    sparse_years = {2019, 2020, 2022}
+    loyo["known_sparse_year"] = loyo["year"].isin(sparse_years)
+    print(
+        loyo[["year", "positives", "known_sparse_year", "venn_abers_mean_interval_width", "venn_abers_top_bin_ratio"]]
+        .to_string(index=False),
+        flush=True,
+    )
+    inverse_positives_corr = loyo["venn_abers_mean_interval_width"].corr(1 / loyo["positives"])
+    sparse_mean_width = loyo.loc[loyo["known_sparse_year"], "venn_abers_mean_interval_width"].mean()
+    dense_mean_width = loyo.loc[~loyo["known_sparse_year"], "venn_abers_mean_interval_width"].mean()
+    print(f"corr(mean_interval_width, 1/positives) across {len(loyo)} folds: {inverse_positives_corr:.3f}", flush=True)
+    print(f"mean interval width, known-sparse years: {sparse_mean_width:.6f}", flush=True)
+    print(f"mean interval width, other years:        {dense_mean_width:.6f}", flush=True)
+    print(
+        "-> "
+        + (
+            "widens honestly on sparse years: real signal, worth shipping (see docs/06 #3)."
+            if sparse_mean_width > dense_mean_width
+            else "does NOT widen on sparse years: negative result per docs/06 #3's own criterion, don't ship."
+        ),
+        flush=True,
+    )
 
     print("\n=== reference: one calibrator fit on all 8 years pooled together ===", flush=True)
     print("(printed only, not persisted or wired into the served model)", flush=True)

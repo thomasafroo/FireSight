@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>FireSight — Kamloops Wildfire Risk (MVP)</title>
+<title>FireSight: Kamloops Wildfire Risk (MVP)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
@@ -15,7 +15,7 @@
     box-shadow: 0 2px 10px rgba(0,0,0,0.2); max-width: 300px;
   }
   #panel h1 { font-size: 15px; margin: 0 0 8px; }
-  #panel p.note { font-size: 12px; color: #555; margin: 4px 0 10px; }
+  #panel p.note { font-size: 12px; color: #555; margin: 4px 0 10px; line-height: 1.5; }
   #panel label { font-size: 12px; display: block; margin-bottom: 4px; }
   #panel input, #panel button {
     font-size: 13px; padding: 4px 6px; box-sizing: border-box; width: 100%;
@@ -35,7 +35,7 @@
     gap: 4px; margin-bottom: 6px;
   }
   /* #date-field prefix (not just .cal-header) so this out-specifies #panel button's
-     width:100% below — an ID selector always beats a class selector regardless of order. */
+     width:100% below; an ID selector always beats a class selector regardless of order. */
   #date-field .cal-header button {
     width: auto; margin: 0; padding: 2px 8px; font-size: 13px; cursor: pointer; flex: none;
   }
@@ -80,18 +80,34 @@
     width: 10px; height: 10px; border-radius: 50%; background: transparent;
     border: 2px solid #1d4ed8;
   }
+  #github-link {
+    position: absolute; bottom: 34px; right: 10px; z-index: 1000;
+    width: 32px; height: 32px; border-radius: 50%;
+    background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #github-link:hover { background: #f0f0f0; }
+  #github-link svg { width: 20px; height: 20px; fill: #222; }
+  .cell-popup { font-size: 12px; max-width: 230px; }
+  .cell-popup .live-btn {
+    width: 100%; font-size: 12px; padding: 4px 6px; margin-top: 6px; cursor: pointer;
+  }
+  .cell-popup .live-btn:disabled { cursor: default; opacity: 0.6; }
+  .cell-popup .live-result { margin-top: 6px; }
+  .cell-popup .live-result ul { margin: 4px 0 0; padding-left: 16px; }
+  .cell-popup .live-source { color: #777; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 
 <div id="panel">
-  <h1>FireSight — Kamloops risk map</h1>
+  <h1>FireSight: Kamloops risk map</h1>
   <p class="note">
-    MVP demo: replays a <em>historical</em> date already in the training
-    dataset through the trained model — not a live forecast. The calendar
-    only allows dates in the fitted model's known range and fire-season
-    window (May 1 – Oct 15, any year) — everything else is disabled.
+    Pick a <em>historical</em> date to see predicted risk next to real
+    recorded fires. Only fire-season dates (May 1 to Oct 15) are enabled.
+    Click a cell marker for its <strong>live</strong> risk instead, scored
+    fresh from current weather and fire-detection feeds.
   </p>
   <label for="date">Date</label>
   <div id="date-field">
@@ -117,9 +133,21 @@
   <div class="actual"><span class="dot"></span><span>actual fire detected that day</span></div>
 </div>
 
+<a id="github-link" href="https://github.com/thomasafroo/FireSight" target="_blank" rel="noopener noreferrer" title="View on GitHub">
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38
+      0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+      -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07
+      -1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12
+      0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
+      .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
+      0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+  </svg>
+</a>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  // No build step on purpose — this is the MVP demo frontend (see
+  // No build step on purpose; this is the MVP demo frontend (see
   // docs/README.md project status); a real frontend would be a proper
   // app, not a single static file calling a local API directly.
   const API_BASE = window.location.hostname === "" || window.location.protocol === "file:"
@@ -133,7 +161,7 @@
   }).addTo(map);
 
   // Towns in/near the Kamloops Fire Centre bbox (-121.5,49.8,-119.0,51.5). Purely a map
-  // navigation aid — recenters the view client-side, independent of /risk-map and the
+  // navigation aid; recenters the view client-side, independent of /risk-map and the
   // trained model, so it works for places with no fire data (e.g. outside the grid/date
   // range, or towns the FIRMS/ERA5 pipeline was never asked about).
   const CITIES = [
@@ -154,10 +182,10 @@
   ];
 
   // Mirrors src/firesight/training/baseline.py's FIRE_SEASON_START/FIRE_SEASON_END and the
-  // real dataset's date range (see api/main.py::_reject_if_outside_fire_season) — duplicated
+  // real dataset's date range (see api/main.py::_reject_if_outside_fire_season); duplicated
   // here (not fetched from the API) so the calendar can disable invalid dates without a round
   // trip. Keep these in sync by hand if the Python constants ever change.
-  const MIN_DATE = "2012-01-30";
+  const MIN_DATE = "2012-03-01";
   const MAX_DATE = "2024-12-30";
   const FIRE_SEASON_START_MD = "05-01";
   const FIRE_SEASON_END_MD = "10-15";
@@ -245,7 +273,7 @@
       shiftMonth(1);
     });
 
-    // Month/year dropdowns, not just prev/next arrows — jumping from, say, 2021 to 2012 one
+    // Month/year dropdowns, not just prev/next arrows: jumping from, say, 2021 to 2012 one
     // month at a time is 108 clicks; a direct jump is what the native picker offered before.
     const monthSelect = document.createElement("select");
     monthSelect.className = "cal-select";
@@ -340,7 +368,7 @@
     if (e.key === "Escape") hideCalendar();
   });
 
-  // Rough km distance for display only (not fed into the model) — fine at this region's
+  // Rough km distance for display only (not fed into the model); fine at this region's
   // scale, same cos(latitude) longitude-scaling idea as features/grid.py::cell_size_degrees.
   function approxKm(lat1, lon1, lat2, lon2) {
     const kmPerDegLat = 111;
@@ -351,7 +379,7 @@
   }
 
   // A cell more than ~2 grid-cell-widths (5km cells, see features/grid.py) from the
-  // searched city isn't really "that city's risk" anymore — flag it instead of implying
+  // searched city isn't really "that city's risk" anymore; flag it instead of implying
   // precision the grid doesn't have for towns near/outside the modeled bbox.
   const OUTSIDE_GRID_KM = 15;
 
@@ -373,7 +401,7 @@
 
     if (currentRows.length === 0) {
       map.setView([city.lat, city.lon], 11);
-      cityStatusEl.textContent = `Centered on ${city.name} — load a risk map to see its risk.`;
+      cityStatusEl.textContent = `Centered on ${city.name}. Load a risk map to see its risk.`;
       return;
     }
 
@@ -398,16 +426,16 @@
     const calibratedNote = nearest.calibrated_risk_probability != null
       ? ` (calibrated ~${(nearest.calibrated_risk_probability * 100).toFixed(3)}%)`
       : "";
-    const fireNote = nearest.actual_ignited ? " — fire detected here that day" : "";
+    const fireNote = nearest.actual_ignited ? ", fire detected here that day" : "";
     const outsideNote = nearestKm > OUTSIDE_GRID_KM
-      ? ` (nearest modeled cell is ~${nearestKm.toFixed(0)}km away — outside the fitted grid)`
+      ? ` (nearest modeled cell is ~${nearestKm.toFixed(0)}km away, outside the fitted grid)`
       : "";
     cityStatusEl.textContent = `${city.name}: ${riskPct}% risk${calibratedNote}${fireNote}${outsideNote}`;
   }
 
   // goToCity is the exact-match fallback: what runs when Enter/Go is pressed with no
   // suggestion picked (e.g. the field was filled by pasting or by tabbing past the
-  // dropdown entirely) — kept separate from the typeahead below so an exact but
+  // dropdown entirely); kept separate from the typeahead below so an exact but
   // never-suggested match (a full, correctly-typed name) still works.
   function goToCity() {
     const input = document.getElementById("city");
@@ -528,6 +556,98 @@
     return "rgb(189, 0, 38)";
   }
 
+  // Live-risk popups: lazy-fetched on click (not prefetched for every marker) -- one grid cell
+  // load can be ~1000s of cells, and each live check is its own Open-Meteo + FIRMS NRT round
+  // trip server-side, so fetching all of them eagerly would be slow and hammer both APIs for
+  // data most of the map's cells will never be looked at again.
+  function todayUTCDateStr() {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())}`;
+  }
+
+  const liveCache = {}; // `${cellId}|${dateStr}` -> {live, explain}
+
+  function cellPopupHtml(row) {
+    const calibratedNote = row.calibrated_risk_probability != null
+      ? `<br/>calibrated: ~${(row.calibrated_risk_probability * 100).toFixed(3)}%`
+      : "";
+    return `
+      <div class="cell-popup">
+        <strong>cell ${row.cell_id}</strong><br/>
+        risk on ${selectedDate}: ${(row.risk_probability * 100).toFixed(3)}%${calibratedNote}
+        ${row.actual_ignited ? "<br/><strong>fire detected here</strong>" : ""}
+        <hr style="margin:6px 0;" />
+        <button type="button" class="live-btn" data-cell="${row.cell_id}">Check live risk now</button>
+        <div class="live-result"></div>
+      </div>
+    `;
+  }
+
+  function renderLiveResult(data) {
+    const { live, explain } = data;
+    const pct = (live.ignition_probability * 100).toFixed(3);
+    const calibratedNote = live.calibrated_probability != null
+      ? ` (calibrated ~${(live.calibrated_probability * 100).toFixed(3)}%)`
+      : "";
+    let contribHtml = "";
+    if (explain && explain.top_contributions && explain.top_contributions.length) {
+      const items = explain.top_contributions
+        .map((c) => `<li>${c.feature}: ${c.value.toFixed(2)} (${c.contribution >= 0 ? "+" : ""}${c.contribution.toFixed(4)})</li>`)
+        .join("");
+      contribHtml = `<div><strong>Why:</strong><ul>${items}</ul></div>`;
+    }
+    return `
+      <strong>Live risk (${live.date}):</strong> ${pct}%${calibratedNote}<br/>
+      <span class="live-source">${live.weather_source}</span><br/>
+      <span class="live-source">${live.fire_detection_source}</span>
+      ${contribHtml}
+    `;
+  }
+
+  async function fetchLiveResult(cellId, dateStr) {
+    const cacheKey = `${cellId}|${dateStr}`;
+    if (liveCache[cacheKey]) return liveCache[cacheKey];
+
+    const [liveRes, explainRes] = await Promise.all([
+      fetch(`${API_BASE}/predict/live?cell_id=${encodeURIComponent(cellId)}&date=${dateStr}`),
+      fetch(`${API_BASE}/predict/explain?cell_id=${encodeURIComponent(cellId)}&date=${dateStr}&top_n=4`),
+    ]);
+    if (!liveRes.ok) {
+      const body = await liveRes.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${liveRes.status}`);
+    }
+    const live = await liveRes.json();
+    // /predict/explain can legitimately 503 (no dataset backing the SHAP background on this
+    // deployment) while /predict/live still works fine -- degrade to "no explanation" rather
+    // than failing the whole live-risk check over an optional add-on.
+    const explain = explainRes.ok ? await explainRes.json() : null;
+
+    const data = { live, explain };
+    liveCache[cacheKey] = data;
+    return data;
+  }
+
+  map.on("popupopen", (e) => {
+    const popupNode = e.popup.getElement();
+    const btn = popupNode.querySelector(".live-btn");
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", async () => {
+      const cellId = btn.dataset.cell;
+      const resultEl = popupNode.querySelector(".live-result");
+      btn.disabled = true;
+      resultEl.textContent = "Fetching live weather + fire detections…";
+      try {
+        const data = await fetchLiveResult(cellId, todayUTCDateStr());
+        resultEl.innerHTML = renderLiveResult(data);
+      } catch (err) {
+        resultEl.textContent = `Live risk unavailable: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
   async function loadRiskMap(date) {
     const statusEl = document.getElementById("status");
     statusEl.textContent = "Loading...";
@@ -569,8 +689,9 @@
         (row.calibrated_risk_probability != null
           ? `<br>calibrated: ~${(row.calibrated_risk_probability * 100).toFixed(3)}%`
           : "") +
-        (row.actual_ignited ? "<br><strong>fire detected here</strong>" : "")
-      );
+        (row.actual_ignited ? "<br><strong>fire detected here</strong>" : "") +
+        "<br><em>click for live risk</em>"
+      ).bindPopup(cellPopupHtml(row));
       marker.addTo(map);
       markers.push(marker);
       markersByCellId[row.cell_id] = marker;

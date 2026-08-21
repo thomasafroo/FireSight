@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+import torch
 
 from firesight.training.sequence_model import (
+    AttentionPoolSequenceCNN,
     SequenceCNN,
     build_raw_sequences,
     fit_sequence_cnn,
@@ -86,3 +88,59 @@ def test_fit_and_score_sequence_cnn_runs_end_to_end_on_synthetic_data():
     assert set(scores) == {"pr_auc", "roc_auc", "top_10pct_capture"}
     for value in scores.values():
         assert 0.0 <= value <= 1.0
+
+
+def test_fit_sequence_cnn_accepts_a_model_cls_override():
+    rng = np.random.default_rng(0)
+    n_train, n_val, seq_len, n_channels = 300, 100, 10, 2
+    train_seq = rng.normal(size=(n_train, seq_len, n_channels)).astype(np.float32)
+    val_seq = rng.normal(size=(n_val, seq_len, n_channels)).astype(np.float32)
+    train_y = (rng.uniform(size=n_train) < 0.1).astype(np.int64)
+    val_y = (rng.uniform(size=n_val) < 0.1).astype(np.int64)
+
+    model = fit_sequence_cnn(train_seq, train_y, val_seq, val_y, epochs=2, batch_size=64, model_cls=AttentionPoolSequenceCNN)
+
+    assert isinstance(model, AttentionPoolSequenceCNN)
+    scores = score_sequence_model(model, val_seq, val_y)
+    for value in scores.values():
+        assert 0.0 <= value <= 1.0
+
+
+def test_attention_pool_sequence_cnn_weights_are_a_valid_per_row_softmax():
+    seq_len, n_channels, batch = 10, 2, 5
+    model = AttentionPoolSequenceCNN(n_channels=n_channels)
+    model.eval()
+    x = torch.randn(batch, seq_len, n_channels)
+
+    with torch.no_grad():
+        output = model(x)
+
+    assert output.shape == (batch,)
+    weights = model.last_attention_weights
+    assert weights.shape == (batch, seq_len)
+    assert torch.all(weights >= 0)
+    assert torch.allclose(weights.sum(dim=1), torch.ones(batch), atol=1e-5)
+
+
+def test_attention_pool_sequence_cnn_learns_to_concentrate_weight_on_the_informative_day():
+    """A day-in-window that alone determines the label (day 0's value, all others pure noise) is
+    exactly the shape docs/06's proposal #4 predicts learned attention should exploit and uniform
+    averaging can't -- checked directly rather than just trusting the architecture on paper."""
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    seq_len, n_channels, n = 10, 1, 800
+    sequences = rng.normal(size=(n, seq_len, n_channels)).astype(np.float32)
+    # Only day 0's value carries signal; every other day is independent noise the model must learn
+    # to down-weight.
+    y = (sequences[:, 0, 0] > 0).astype(np.int64)
+
+    model = fit_sequence_cnn(
+        sequences[:600], y[:600], sequences[600:], y[600:], epochs=15, batch_size=64, model_cls=AttentionPoolSequenceCNN
+    )
+    model.eval()
+    device = next(model.parameters()).device
+    with torch.no_grad():
+        model(torch.from_numpy(sequences[600:]).to(device))
+    mean_weight_by_day = model.last_attention_weights.mean(dim=0).cpu().numpy()
+
+    assert mean_weight_by_day[0] > mean_weight_by_day[1:].max()

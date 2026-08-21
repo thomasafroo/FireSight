@@ -39,6 +39,27 @@ ENGINEERED_COLUMNS = [
     # features above) — listed so drop_incomplete_history still enforces completeness on them.
     "cape",
     "convective_precip_mm",
+    # ffmc/dmc/dc/isi/bui/fwi (Canadian Forest Fire Weather Index System, features/fwi.py) arrive
+    # already-complete from pipeline/build_dataset.py's separate compute_fwi call (recursive
+    # day-over-day, needs grid_cells for latitude -- doesn't fit engineer_features' plain
+    # per-cell-group signature, same reason cape/convective_precip_mm are joined outside it too).
+    # Legitimately NaN before each year's March 1 reset (see fwi.py's module docstring) --
+    # listed here so drop_incomplete_history drops those rows the same way it already drops
+    # rolling-window warm-up rows, not because it's an error.
+    "ffmc",
+    "dmc",
+    "dc",
+    "isi",
+    "bui",
+    "fwi",
+    # elevation_m/slope_degrees/aspect_sin/aspect_cos (features/topography.py) are static per-cell
+    # terrain, joined in by build_dataset.py the same way cape/fwi are -- listed here so a fetch
+    # gap (a cell whose elevation lookup failed) is caught the same way any other incomplete row is,
+    # not silently left as a NaN feature.
+    "elevation_m",
+    "slope_degrees",
+    "aspect_sin",
+    "aspect_cos",
 ]
 
 

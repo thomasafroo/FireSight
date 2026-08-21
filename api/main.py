@@ -1,6 +1,6 @@
 """FastAPI inference service wrapping the trained wildfire ignition model.
 
-Three endpoints:
+Four endpoints:
 
 - POST /predict — score one (cell, day)'s worth of already-computed
   features. Does *not* fetch live weather or run feature engineering
@@ -10,6 +10,10 @@ Three endpoints:
   detections from FIRMS NRT, running both through the same feature-
   engineering the training pipeline uses — see features/live_weather.py,
   features/live_fire.py, and docs/07-serving.md.
+- GET /predict/explain — same live fetch as /predict/live, plus a
+  per-prediction SHAP breakdown of which features drove that one score —
+  see evaluation/shap_analysis.py and docs/06-modeling-and-evaluation.md
+  #2-shap-explainability.
 - GET /risk-map — a historical demo endpoint: for a date already in the
   processed dataset, returns every cell's predicted risk *and* the
   actual recorded label, so the frontend risk map has something real to
@@ -30,6 +34,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, create_model
 
+from firesight.evaluation.shap_analysis import explain, top_contributions
 from firesight.features.grid import build_grid_cells
 from firesight.features.live_fire import build_live_neighbor_fire_features
 from firesight.features.live_weather import build_live_feature_row
@@ -39,9 +44,18 @@ from firesight.training.baseline import (
     FIRE_SEASON_END,
     FIRE_SEASON_START,
     LABEL_COLUMN,
+    TRAIN_END,
+    filter_fire_season,
 )
 from firesight.training.export_model import MODEL_PATH
 from firesight.training.persist import ModelBundle, load_model_bundle
+
+# A modest, fixed-seed sample of *training* rows (dates before TRAIN_END, matching
+# evaluation/shap_analysis.py's own background) — the reference distribution SHAP values in
+# /predict/explain are computed relative to, not the rows being explained. 300 matches
+# shap_analysis.py's choice: plenty for `feature_perturbation="interventional"` without making
+# each request re-evaluate the model against an unnecessarily large background sample.
+SHAP_BACKGROUND_SIZE = 300
 
 DATASET_PATH = Path(os.environ.get("FIRESIGHT_DATASET_PATH", "data/processed/kamloops_dataset.parquet"))
 MODEL_BUNDLE_PATH = Path(os.environ.get("FIRESIGHT_MODEL_PATH", str(MODEL_PATH)))
@@ -67,8 +81,20 @@ async def lifespan(app: FastAPI):
     if DATASET_PATH.exists():
         keep = [DATE_COLUMN, "cell_id", LABEL_COLUMN, *bundle.feature_columns]
         state["dataset"] = pd.read_parquet(DATASET_PATH, columns=keep)
+        # /predict/explain's SHAP background: same fire-season + pre-TRAIN_END filter
+        # shap_analysis.py's __main__ uses, so a background built here is the same reference
+        # distribution the offline analysis in docs/06 was validated against, not an ad hoc one.
+        train_rows = filter_fire_season(state["dataset"])
+        train_rows = train_rows[train_rows[DATE_COLUMN] < TRAIN_END]
+        background_n = min(SHAP_BACKGROUND_SIZE, len(train_rows))
+        state["shap_background"] = (
+            train_rows[bundle.feature_columns].sample(n=background_n, random_state=0)
+            if background_n > 0
+            else None
+        )
     else:
         state["dataset"] = None
+        state["shap_background"] = None
 
     yield
     state.clear()
@@ -159,18 +185,12 @@ def predict(features: dict) -> dict[str, float | None]:
     }
 
 
-@app.get("/predict/live")
-def predict_live(
-    cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
-    date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
-) -> dict[str, Any]:
-    """Score a grid cell's *current* conditions via live feeds, not historical replay.
+def _resolve_live_features(cell_id: str, date: str | None) -> tuple[dt.date, float, float, dict[str, float]]:
+    """Shared cell/date validation + live feature fetch behind /predict/live and /predict/explain.
 
-    Unlike /predict (which requires the caller to already have computed
-    feature values) this fetches recent weather from Open-Meteo and recent
-    neighbor-cell fire detections from FIRMS NRT itself, then runs both
-    through the same feature-engineering functions training uses — see
-    features/live_weather.py, features/live_fire.py, and docs/07-serving.md.
+    Raises the same HTTPExceptions either endpoint already documented (404 unknown cell, 400
+    future/off-season date, 502 fetch failure, 422 insufficient history) so both callers get
+    identical error behavior for identical reasons — not almost-identical hand-duplicated checks.
     """
     grid_cells: pd.DataFrame = state["grid_cells"]
     cell = grid_cells[grid_cells["cell_id"] == cell_id]
@@ -185,7 +205,6 @@ def predict_live(
 
     latitude = float(cell.iloc[0]["latitude"])
     longitude = float(cell.iloc[0]["longitude"])
-    bundle: ModelBundle = state["bundle"]
 
     try:
         features = build_live_feature_row(latitude, longitude, target_date, cell_id)
@@ -194,6 +213,25 @@ def predict_live(
         raise HTTPException(status_code=502, detail=f"Live data fetch failed: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return target_date, latitude, longitude, features
+
+
+@app.get("/predict/live")
+def predict_live(
+    cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
+    date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
+) -> dict[str, Any]:
+    """Score a grid cell's *current* conditions via live feeds, not historical replay.
+
+    Unlike /predict (which requires the caller to already have computed
+    feature values) this fetches recent weather from Open-Meteo and recent
+    neighbor-cell fire detections from FIRMS NRT itself, then runs both
+    through the same feature-engineering functions training uses — see
+    features/live_weather.py, features/live_fire.py, and docs/07-serving.md.
+    """
+    target_date, latitude, longitude, features = _resolve_live_features(cell_id, date)
+    bundle: ModelBundle = state["bundle"]
 
     return {
         "cell_id": cell_id,
@@ -204,6 +242,52 @@ def predict_live(
         "calibrated_probability": bundle.predict_calibrated_proba(features),
         "weather_source": "open-meteo archive API (ERA5-based reanalysis + near-real-time blend)",
         "fire_detection_source": "NASA FIRMS NRT (VIIRS_NOAA20_NRT)",
+    }
+
+
+@app.get("/predict/explain")
+def predict_explain(
+    cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
+    date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
+    top_n: int = Query(6, ge=1, le=13, description="How many top per-feature contributions to return."),
+) -> dict[str, Any]:
+    """/predict/live's score, plus a per-prediction SHAP breakdown of what drove it.
+
+    Fetches the same live weather + neighbor-fire features /predict/live does, then runs
+    `evaluation/shap_analysis.py`'s TreeExplainer against a fixed training-set background sample
+    built once at startup (see `lifespan`). Contributions are in raw `ignition_probability` units:
+    there is no SHAP decomposition of `calibrated_probability`, since the isotonic calibrator is a
+    separate post-hoc regression bolted on after the tree ensemble, not part of its structure — see
+    docs/06-modeling-and-evaluation.md#2-shap-explainability.
+    """
+    background = state.get("shap_background")
+    if background is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Historical dataset not available on this deployment — /predict/explain needs a "
+            "training-set background sample to compute SHAP values against.",
+        )
+
+    target_date, latitude, longitude, features = _resolve_live_features(cell_id, date)
+    bundle: ModelBundle = state["bundle"]
+
+    row = pd.DataFrame([features])[bundle.feature_columns]
+    explanation = explain(bundle.model, row, background)
+    contributions = top_contributions(explanation, row_index=0, top_n=top_n)
+
+    return {
+        "cell_id": cell_id,
+        "date": target_date.isoformat(),
+        "latitude": latitude,
+        "longitude": longitude,
+        "ignition_probability": bundle.predict_proba(features),
+        "calibrated_probability": bundle.predict_calibrated_proba(features),
+        "top_contributions": contributions,
+        "explanation_note": (
+            "Contributions are in raw ignition_probability units, signed: positive pushes the "
+            "prediction up, negative pushes it down. No SHAP decomposition exists for "
+            "calibrated_probability — see docs/06-modeling-and-evaluation.md#2-shap-explainability."
+        ),
     }
 
 

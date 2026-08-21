@@ -21,6 +21,7 @@ dependencies = [
     "shap>=0.52.0",
     "torch>=2.13.0",
     "uvicorn[standard]>=0.52.1",
+    "venn-abers>=1.5.4",
     "xarray>=2026.7.0",
     "xgboost>=3.4.0",
 ]

@@ -1197,8 +1197,10 @@ could hand a model, categorically different from "the air is hot and dry nearby.
 part of the [rolling-origin backtest instability](#rolling-origin-backtest-is-719-typical-or-the-best-
 year-in-the-dataset) and [extreme-year degradation](#why-performance-swings-by-month-and-year)
 findings above: those were diagnosed against a purely weather-driven model with no way to see a fire
-already spreading nearby, which this feature directly targets — not re-verified against this feature
-yet, a natural next check rather than an assumption.
+already spreading nearby, which this feature directly targets — re-verified below in [Re-verifying the
+rolling-origin backtest against the 13-feature
+model](#re-verifying-the-rolling-origin-backtest-against-the-13-feature-model), not left as an
+assumption.
 
 **Promoted to the served model** (`export_model.py::BEST_RANDOM_FOREST_PARAMS`, unchanged
 hyperparameters, refit on the new 13-column `FEATURE_COLUMNS`; `data/processed/model.joblib`
@@ -1210,6 +1212,61 @@ blocker). **This broke** `/predict/live` for about a day — accepted deliberate
 active immediately rather than dormant, since this is the feature set actually being promoted. Fixed
 2026-08-20 via a live FIRMS NRT feed — see
 [Serving](07-serving.md#live-weather-for-predictlive) for the full writeup.
+
+#### Re-verifying the rolling-origin backtest against the 13-feature model
+
+`evaluation/backtest.py` re-run 2026-08-20 against the promoted 13-feature (neighbor-fire-inclusive)
+model, using the identical 8-fold expanding-window protocol as the original [rolling-origin
+backtest](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset) — same holdout years,
+same `BEST_RANDOM_FOREST_PARAMS`, no re-tuning per fold, so this is a clean before/after on the one
+variable that changed (the feature set):
+
+| year | old top-10% (weather-only) | new top-10% (+neighbor-fire) | old PR-AUC | new PR-AUC |
+| ---- | --------------------------- | ----------------------------- | ---------- | ---------- |
+| 2017 | 30.8%                        | 29.1%                         | 0.0141     | 0.0460     |
+| 2018 | 25.3%                        | 52.8%                         | 0.0023     | 0.0511     |
+| 2019 | 22.8%                        | 54.4%                         | 0.0004     | 0.0052     |
+| 2020 | 16.3%                        | 34.9%                         | 0.0003     | 0.0016     |
+| 2021 | 27.0%                        | **92.8%**                     | 0.0333     | 0.4390     |
+| 2022 | **8.2%**                     | **75.5%**                     | 0.0005     | 0.0741     |
+| 2023 | 41.8%                        | 90.8%                         | 0.0136     | 0.3654     |
+| 2024 | 74.4%                        | 87.6%                         | 0.0113     | 0.3688     |
+
+**The two structurally-broken extreme years are fixed, not just improved.** 2021 and 2022 were the two
+folds [Why performance swings by month and year](#why-performance-swings-by-month-and-year) diagnosed as
+having a real, mechanistic problem beyond ordinary noise — a fixed top-10% ranking budget breaking down
+under extreme same-day fire counts, plus province-wide heat events compressing the *weather* signal
+itself so there was less cell-to-cell variation left to rank on. `neighbor_fire_count` sidesteps both
+mechanisms directly: it's not a weather feature that compresses under a heat dome, and it hands the model
+a second, independent axis (an actively-spreading nearby fire) to rank on when same-day weather alone
+stops discriminating. The result: 2022 goes from this backtest's *worst* year (8.2%) to comfortably
+mid-pack (75.5%), and 2021 — previously *underperforming* its own Jul/Aug-heavy month mix — becomes the
+single best year in the new backtest (92.8%).
+
+**Cross-year instability itself is reduced but not eliminated.** New top-10% capture: mean **64.7%**,
+median **64.9%**, standard deviation **~23.8 percentage points** — against the old mean 30.8%/median
+26.2%/~19pp. The absolute *floor* rose sharply (worst year 8.2% -> 29.1%) and the *center* roughly
+doubled, but the spread is still wide (29%-93%) and, in absolute percentage-point terms, slightly larger
+than before, not smaller — this feature raised performance across the board more than it equalized it.
+2017 is now the clear worst year, essentially unchanged from before (30.8% -> 29.1%): it's an outlier in
+the other direction — high fire count (1,433 positives, BC's 3rd-worst season in this dataset) without
+2021's extreme same-day clustering, so neither weather compression nor budget saturation explains it as
+cleanly, and the reason it doesn't benefit from `neighbor_fire_count` the way 2021/2022 did is an open
+question this pass didn't chase further.
+
+**The month-of-season correlation weakened, consistent with the mechanism above.**
+`corr(jul_aug_fire_share, top_10pct_capture)` dropped from **r=0.63** (weather-only) to **r=0.44** (with
+neighbor-fire) across the same 8 folds — expected if part of what month-mix was previously a *proxy* for
+(whether a year had enough nearby-fire density for the weather signal to still discriminate) is now
+captured more directly by `neighbor_fire_count` itself, leaving month-of-season explaining a smaller
+share of the remaining variance.
+
+**Practical takeaway, updated:** the "don't cite 71.9%/74.4% as typical" caution from the original
+backtest still applies in direction (real year-to-year spread remains large), but the *substance* of the
+caution has changed — the model's realistic worst-case floor is now closer to ~30% than ~8%, and its
+typical (median) performance is now closer to the previously-best-observed years than to the previously-
+typical ones. Both are genuine, measured improvements from adding a same-week fire-precursor feature, not
+artifacts of retuning or a different evaluation protocol.
 
 ### 2. SHAP explainability
 
@@ -1326,9 +1383,12 @@ Plots (`shap_beeswarm.png` and the three `shap_waterfall_*.png` files above) wer
 `data/processed/` (gitignored build output, same as `model.joblib`) rather than committed or embedded
 in this markdown file, matching this project's existing prose-and-tables documentation style.
 
-**Not done, deliberately out of scope for this pass:** a `/predict/explain` live endpoint. Technically
-easy (`TreeExplainer` is millisecond-fast per call at this model's size) but new API surface with its
-own contract, held as a separate, later follow-up rather than bundled into an already-large session.
+**Wired into a live endpoint 2026-08-20:** `GET /predict/explain` — see
+[Serving](07-serving.md#explaining-a-live-prediction-predictexplain) for the full write-up (background-
+sample construction, response shape, and a live verification against a real active fire cluster).
+Originally scoped out of this pass as a separate follow-up; the live-forecasting work that fixed
+`/predict/live`'s neighbor-fire feed made wiring this in the natural next step rather than a new,
+unrelated session.
 
 ### 3. Venn-Abers per-prediction uncertainty (not generic "conformal prediction")
 
@@ -1370,6 +1430,44 @@ it, held to the same standard the reverted calendar/proximity features were.
 backtest infrastructure entirely). Higher for shipping (a new `ModelBundle`/API field) — gate that on
 the LOYO check actually confirming value first.
 
+**Result, run 2026-08-20: negative — not shipped.** `evaluation/calibration.py`'s LOYO check extended
+with the low-level `venn_abers.VennAbers` class (`fit_venn_abers_calibrator`/
+`apply_venn_abers_calibrator`), fit on the same 8 rolling-origin folds the isotonic/sigmoid columns
+already use:
+
+| year | positives | `venn_abers` Brier | `venn_abers` top-bin ratio | mean interval width |
+| ---- | --------- | ------------------- | --------------------------- | -------------------- |
+| 2017 | 1,433     | 0.005963             | 2.756                        | 0.000171              |
+| 2018 | 229       | 0.000920             | 1.181                        | 0.000025              |
+| 2019 | 57        | 0.000238             | 2.642                        | 0.000012              |
+| 2020 | 43        | 0.000181             | 5.580                        | 0.000015              |
+| 2021 | 2,628     | 0.009747             | 1.568                        | **0.004938**          |
+| 2022 | 98        | 0.000387             | 1.707                        | 0.000018              |
+| 2023 | 802       | 0.002713             | 0.825                        | 0.000037              |
+| 2024 | 242       | 0.000798             | 1.179                        | 0.000023              |
+
+`venn_abers`'s Brier/top-bin-ratio columns track isotonic's almost exactly (expected — both are
+monotonic score-to-frequency mappings fit on the same pooled data), so the point-probability half of
+Venn-Abers adds nothing new here. **The real test was the interval width, and it fails cleanly:**
+`corr(mean_interval_width, 1/positives)` across the 8 folds is **-0.36** — weakly *negative*, the
+opposite sign the "widens honestly on sparse years" hypothesis needs. Bucketed the way the proposal
+specified: known-sparse years (2019/2020/2022) have a *smaller* mean interval width (0.000015) than the
+other five years (0.001039) — backwards from the prediction. The entire "other years" number is one
+outlier: 2021 alone is 0.004938, roughly 30-400x every other year's width, while 2019/2020/2022 (the
+years actually flagged unreliable by the isotonic/sigmoid top-bin-ratio columns) have the *narrowest*
+intervals in the whole table. Interval width here is tracking something else — most plausibly 2021's own
+extreme raw scores (its top-bin mean predicted is 0.79, far above every other year) and/or its unusually
+small calibration pool (2,904 pooled positives, the smallest of the 8 folds, since 2021 itself
+contributes more positives than the other seven years combined) — not "how reliable is this year's
+calibration" in the sense the sparse-year finding actually means.
+
+**Per the negative-result criterion defined up front: don't ship.** No `ModelBundle`/API changes were
+made — `fit_venn_abers_calibrator`/`apply_venn_abers_calibrator` and the extended LOYO check stay in
+`evaluation/calibration.py` as validated, reusable tooling (and a real, useful cross-check that
+isotonic's point estimate isn't leaving anything on the table), not as a served uncertainty field. If a
+future feature or dataset change makes prediction-set-style uncertainty worth revisiting, this exact
+check can be re-run cheaply — it's already wired into the LOYO rig, not a one-off script.
+
 ### 4. Attention-pooling on the sequence model (a narrower angle than a full Transformer)
 
 See [Testing the sequence-modeling hypothesis](#testing-the-sequence-modeling-hypothesis) and
@@ -1395,3 +1493,123 @@ test positives, checking whether the model concentrates near the ignition day or
 low-risk experiment worth running for the interpretability artifact and research completeness — not
 as a likely path to beating RandomForest, given this project is 2-for-2 against "more capacity helps"
 so far.
+
+**Result, run 2026-08-20: negative, as expected — and now 3-for-3 against "more capacity/complexity
+helps."** `AttentionPoolSequenceCNN` trained via the identical `fit_sequence_cnn` harness (same rows,
+same epochs, same optimizer) as `SequenceCNN`, on the same fire-season 2012-2022 train / 2023 val / 2024
+test split as [Testing the sequence-modeling hypothesis](#testing-the-sequence-modeling-hypothesis):
+
+| model                    | val PR-AUC | val top-10% | test PR-AUC | test top-10% |
+| ------------------------ | ---------- | ----------- | ------------ | ------------ |
+| RandomForest (13-feature)| 0.3654     | 90.8%       | 0.3727       | 86.0%        |
+| SequenceCNN (avg-pool)   | 0.0114     | 39.0%       | 0.0084       | 68.6%        |
+| AttentionPoolSequenceCNN | 0.0091     | 34.4%       | 0.0049       | 65.3%        |
+
+Attention-pooling didn't just fail to beat RandomForest (expected) — it also underperformed plain
+`SequenceCNN` averaging on every metric, on both splits. Learning which days to weight, with only ~66
+extra parameters, still made this architecture strictly worse at this task, not neutral.
+
+**The interpretability artifact explains why, and it isn't quite the "uniform" negative result
+predicted up front.** Mean attention weight by lag-day, pooled across all 242 real test-set fires,
+doesn't spread evenly (uniform would be 3.3% per day) and doesn't concentrate on the ignition day either
+(day 0's mean weight: 0.01%, far *below* uniform) — instead it puts a large, oddly specific 23.3% of its
+attention mass on day-2-before-target alone, with smaller secondary bumps around days 26-27-before and a
+mild elevated plateau around days 10-14-before. That's a third outcome, worse than either alternative
+the proposal considered: not "spreads out because there's nothing to learn" and not "learns the sensible
+thing," but *learns a specific, non-uniform pattern that doesn't correspond to the most information-
+relevant day* — a mild overfitting-to-noise signature consistent with why its scores came in below plain
+averaging's. Plot saved to `data/processed/attention_weights_by_fire.png` (gitignored build output,
+matching this project's plot-saving convention); caught (top-10%) and missed fires' curves both show
+this same day-2 spike shape, not a caught-vs-missed difference worth a separate finding.
+
+**Conclusion, matching the honest framing set up front:** this remains a cheap, low-risk experiment that
+paid off as research completeness and interpretability, not as a path to a better model.
+`SequenceCNN`/`AttentionPoolSequenceCNN` stay diagnostic-only scripts, same as before this experiment —
+nothing here changes `export_model.py` or what's served.
+
+## Closing the feature-category gap: FWI, terrain, and fuel type (2026-08-21)
+
+A competitive-landscape review of other wildfire-ML systems (the Canadian FWI System itself, Google's
+Next Day Wildfire Spread benchmark, CanadaFireSat, a 2020-2025 systematic review of 341 ML wildfire
+studies) surfaced one structural gap ahead of any modeling refinement: FireSight was a **weather-only**
+model. Fuel/vegetation state is the single largest input category reported across that literature
+(44.7% of all reported ML wildfire model inputs — ahead of climate/weather), and terrain (elevation,
+slope, aspect) is foundational to the Canadian FBP System itself; FireSight had zero features in either
+category. Three additions closed that gap, each implemented and validated independently before being
+combined into one measured benchmark:
+
+**1. Canadian FWI System (`features/fwi.py`).** FFMC/DMC/DC/ISI/BUI/FWI — the actual fire-danger rating
+BC Wildfire Service runs operationally — computed via the Van Wagner (1985/1987) recursive equations
+from data already in the pipeline (temp/RH/wind/precip), not a new data source. The six formulas were
+transcribed from the official NRCan-maintained reference implementation (`cffdrs/cffdrs_r`'s individual
+component R files, not a secondary description of them) and checked against that package's own
+`tests/testthat/data/*.csv` fixtures — 33 reference-value tests in `tests/test_fwi.py`, every one an
+exact match, not a "looks plausible" translation. **A deliberate simplification, not an oversight:**
+with no snow-cover data, there's no real per-station spring-melt date to reset FFMC/DMC/DC from, so the
+recursion resets to standard start-up values (85/6/15) on a fixed March 1 each year instead — days
+before a record's first reset are left `NaN` (dropped by `drop_incomplete_history`, the same "don't
+guess, drop it" precedent `days_since_rain` already established) rather than running the raw recursion
+through a snow-covered winter, which would misread snow-water-equivalent as duff-wetting rain.
+
+**2. Terrain (`features/topography.py`).** Elevation from Open-Meteo's Elevation API (Copernicus DEM
+2021, 90m) — the same provider `live_weather.py` already depends on, and a point-query API rather than
+a DEM download, so no new GDAL/rasterio dependency (`features/grid.py`'s docstring already states that
+tradeoff for this project). Slope and aspect are derived via Horn's method (Horn 1981, the same formula
+ESRI's Slope/Aspect tools implement) from each cell's 8 Moore-neighbor elevations — appropriate at this
+project's 5km resolution, where elevation is already a coarse per-cell value. Aspect is encoded as
+sin/cos of a compass bearing, the same circular-encoding precedent `add_wind_features` already set;
+`tests/test_topography.py` includes two physically-derived checks (a synthetic east-rising elevation
+grid must produce a west-facing aspect, and vice versa for north-rising/south-facing) rather than only
+checking the code runs.
+
+**3. Fuel type (`features/fuel_type.py`).** BC's Provincial Fuel Type Layer
+(`WHSE_LAND_AND_NATURAL_RESOURCE.PROT_FUEL_TYPE_SP`) is the FBP-classification layer (C-1..C-7, D-1/2,
+M-1..M-4, S-1..S-3, O-1a/b, N, W) BC Wildfire Service's own Prometheus fire-growth simulator consumes —
+but it's served as individual forest-stand polygons (>400,000 intersect the Kamloops FC bbox alone; the
+province-wide download is a ~4GB File Geodatabase needing GDAL to read), not a small pre-clipped file, so
+this queries the WFS endpoint directly per grid-cell centroid with a small bounding box instead of
+downloading it. One real, checked-against-the-live-service correction along the way: `FUEL_TYPE_CD`
+often carries a burn-history prefix (`B71_S-2`) that would have multiplied the effective class count far
+past the ~16 base FBP types — `FT_PROMETHEUS`, the same layer's own pre-cleaned base code, is what's
+actually kept. One-hot encoded per code *actually present* in the Kamloops FC extract (19 codes, not a
+fixed 16-class province-wide schema), several of them thin (`C-4`: 2 cells; several `M-1/M-2 (NN PC)`
+variants: 1-2 cells each) — a real limitation of a small-region MVP that a province-wide scale-up would
+mostly resolve.
+
+### Result: measured, mixed-to-negative — not promoted
+
+All 29 new columns (6 FWI + 4 terrain + 19 fuel type) added to the training set at once and benchmarked
+against the current 13-feature served model, same `BEST_RANDOM_FOREST_PARAMS`, same train/val/test split
+— matching the exact methodology `cape`/`convective_precip_mm` was evaluated with above:
+
+| model                                     | val PR-AUC | val top-10% | test PR-AUC | test top-10% |
+| ------------------------------------------ | ---------- | ----------- | ------------ | ------------ |
+| 13 features (served)                       | 0.3654     | 90.8%        | 0.3727        | 86.0%        |
+| 42 features (+ FWI + terrain + fuel type)  | 0.3562     | 90.6%        | 0.3172        | 86.4%        |
+
+Mixed, and on the metric that matters most (test PR-AUC, the untouched 2024 year), meaningfully worse
+(-15% relative) — not a clean win the way `neighbor_fire_count` was, and not a clean no-op either. MDI
+feature importance on the 42-feature model shows the new features aren't dead weight sitting unused:
+`bui` (2.0%), `dmc` (1.8%), `elevation_m` (1.5%), `aspect_sin` (1.4%), and `fwi` (1.4%) each individually
+outrank several existing weather features (`t2m_mean_7d` 0.3%, `wind_speed` 0.2%, `precip_30d` 0.2%) —
+the model does lean on them — but that didn't translate into better held-out generalization.
+
+**Two real, undecided confounds, named rather than papered over:** (1) `BEST_RANDOM_FOREST_PARAMS`'
+`max_features=0.6063` is a *fraction* of the column count — at 13 columns that's ~8 candidate features
+per split, at 42 columns it's ~25, a substantially different effective regularization the params were
+never tuned for, so this result can't cleanly separate "these features don't help" from "these
+hyperparameters are stale for a 3x wider column set." (2) The fuel-type one-hot columns are genuinely
+thin at this region's scale (several under 3 cells), diluting signal-to-noise in a way a province-wide
+extent likely wouldn't. Neither confound was chased further this pass — matching the same standard the
+`cape`/`convective_precip_mm` result was held to (a single measured comparison under unchanged
+hyperparameters is enough to decide *don't ship yet*, not enough to definitively rule the features out
+forever).
+
+**Decision: not promoted.** `training/baseline.py::FEATURE_COLUMNS` and `export_model.py`'s served model
+are **unchanged** (still the 13-feature set). The new columns stay in `kamloops_dataset.parquet`
+(enforced complete by `drop_incomplete_history`) and the fetch/cache modules
+(`features/fwi.py`/`topography.py`/`fuel_type.py`, cached under `data/raw/`) as validated, reusable
+groundwork — a future pass with a re-tuned `max_features` (or a per-group ablation isolating FWI from
+terrain from fuel type, rather than all three at once) is the natural next check, not something this
+result argues for deleting. `/predict/live`/`/predict/explain` are unaffected either way, since neither
+endpoint's served model changed.

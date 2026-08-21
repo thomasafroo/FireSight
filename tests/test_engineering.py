@@ -159,10 +159,10 @@ def test_engineer_features_end_to_end_and_drop_incomplete_history():
     assert complete[weather_derived_columns].isna().sum().sum() == 0
 
 
-def test_drop_incomplete_history_defaults_also_enforce_cape_completeness():
-    # cape/convective_precip_mm are joined in (build_dataset.py), not engineered here, but
-    # drop_incomplete_history's *default* column list should still enforce completeness on them
-    # the same way it does for every other feature.
+def test_drop_incomplete_history_defaults_also_enforce_cape_and_fwi_completeness():
+    # cape/convective_precip_mm and ffmc/dmc/dc/isi/bui/fwi are joined in (build_dataset.py), not
+    # engineered here, but drop_incomplete_history's *default* column list should still enforce
+    # completeness on them the same way it does for every other feature.
     df = pd.DataFrame(
         {
             "days_since_rain": [1.0, 2.0],
@@ -180,6 +180,16 @@ def test_drop_incomplete_history_defaults_also_enforce_cape_completeness():
             "neighbor_fire_count_7d": [0.0, 0.0],
             "cape": [100.0, np.nan],
             "convective_precip_mm": [0.0, 0.0],
+            "ffmc": [85.0, 85.0],
+            "dmc": [6.0, 6.0],
+            "dc": [15.0, 15.0],
+            "isi": [1.0, 1.0],
+            "bui": [1.0, 1.0],
+            "fwi": [1.0, 1.0],
+            "elevation_m": [500.0, 500.0],
+            "slope_degrees": [2.0, 2.0],
+            "aspect_sin": [0.0, 0.0],
+            "aspect_cos": [1.0, 1.0],
         }
     )
     complete = drop_incomplete_history(df)

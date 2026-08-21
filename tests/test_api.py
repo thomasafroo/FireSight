@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 import requests
 from fastapi.testclient import TestClient
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 
@@ -246,6 +247,119 @@ def test_predict_live_surfaces_a_fire_detection_fetch_failure_as_a_502(client, m
 
     monkeypatch.setattr(main_module, "build_live_neighbor_fire_features", _raise)
     response = client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 502
+
+
+def _build_explain_client(tmp_path, monkeypatch):
+    """/predict/explain needs a tree-based model (`shap.TreeExplainer`) — the `client` fixture's
+    LogisticRegression bundle above isn't usable for it, so this is a dedicated fixture rather
+    than reusing `_build_client`."""
+    train = pd.DataFrame(
+        {
+            "t2m": [270.0, 300.0, 271.0, 299.0, 305.0, 268.0],
+            "precip_mm": [0.0, 0.0, 5.0, 1.0, 0.0, 8.0],
+            "y": [0, 1, 0, 1, 1, 0],
+        }
+    )
+    model = RandomForestClassifier(n_estimators=10, max_depth=3, random_state=0).fit(train[FEATURES], train["y"])
+    bundle = ModelBundle(model=model, feature_columns=FEATURES, metadata={"model_type": "RandomForestClassifier"})
+    model_path = tmp_path / "model.joblib"
+    save_model_bundle(bundle, model_path)
+
+    dataset = pd.DataFrame(
+        {
+            "cell_id": ["1124_-1696"] * 6,
+            DATE_COLUMN: pd.to_datetime(
+                ["2021-08-01", "2021-08-02", "2021-08-03", "2021-08-04", "2021-08-05", "2021-08-06"]
+            ),
+            LABEL_COLUMN: train["y"],
+            "t2m": train["t2m"],
+            "precip_mm": train["precip_mm"],
+        }
+    )
+    dataset_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(dataset_path)
+
+    monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("FIRESIGHT_DATASET_PATH", str(dataset_path))
+
+    import importlib
+
+    import api.main as main_module
+
+    importlib.reload(main_module)
+
+    return TestClient(main_module.app)
+
+
+@pytest.fixture
+def explain_client(tmp_path, monkeypatch):
+    with _build_explain_client(tmp_path, monkeypatch) as test_client:
+        yield test_client
+
+
+def test_predict_explain_returns_ranked_top_contributions_for_a_valid_cell(explain_client, monkeypatch):
+    import api.main as main_module
+
+    _patch_live_fetches(monkeypatch, main_module)
+    response = explain_client.get(
+        "/predict/explain", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15", "top_n": 2}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cell_id"] == A_REAL_CELL_ID
+    assert body["date"] == "2024-07-15"
+    assert 0.0 <= body["ignition_probability"] <= 1.0
+    assert len(body["top_contributions"]) == 2
+
+    contributions = body["top_contributions"]
+    abs_values = [abs(c["contribution"]) for c in contributions]
+    assert abs_values == sorted(abs_values, reverse=True)
+    for contrib in contributions:
+        assert set(contrib.keys()) == {"feature", "value", "contribution"}
+        assert contrib["feature"] in FEATURES
+
+
+def test_predict_explain_503s_when_no_dataset_is_available_for_a_background_sample(tmp_path, monkeypatch):
+    train = pd.DataFrame({"t2m": [270.0, 300.0], "precip_mm": [0.0, 1.0], "y": [0, 1]})
+    model = RandomForestClassifier(n_estimators=5, random_state=0).fit(train[FEATURES], train["y"])
+    bundle = ModelBundle(model=model, feature_columns=FEATURES, metadata={})
+    model_path = tmp_path / "model.joblib"
+    save_model_bundle(bundle, model_path)
+
+    monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    # A path guaranteed not to exist, not delenv -- delenv would fall back to the module's real
+    # default (data/processed/kamloops_dataset.parquet), which does exist in this checkout.
+    monkeypatch.setenv("FIRESIGHT_DATASET_PATH", str(tmp_path / "no_dataset_here.parquet"))
+
+    import importlib
+
+    import api.main as main_module
+
+    importlib.reload(main_module)
+    with TestClient(main_module.app) as test_client:
+        response = test_client.get("/predict/explain", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 503
+
+
+def test_predict_explain_404s_for_an_unknown_cell(explain_client):
+    response = explain_client.get("/predict/explain", params={"cell_id": "not-a-real-cell", "date": "2024-07-15"})
+    assert response.status_code == 404
+
+
+def test_predict_explain_rejects_a_future_date(explain_client):
+    response = explain_client.get("/predict/explain", params={"cell_id": A_REAL_CELL_ID, "date": "2099-07-15"})
+    assert response.status_code == 400
+
+
+def test_predict_explain_surfaces_a_live_fetch_failure_as_a_502(explain_client, monkeypatch):
+    import api.main as main_module
+
+    def _raise(*args, **kwargs):
+        raise requests.exceptions.ConnectionError("network unreachable")
+
+    monkeypatch.setattr(main_module, "build_live_feature_row", _raise)
+    response = explain_client.get("/predict/explain", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
     assert response.status_code == 502
 
 

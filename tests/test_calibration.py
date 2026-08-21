@@ -1,7 +1,9 @@
 import numpy as np
 
 from firesight.evaluation.calibration import (
+    apply_venn_abers_calibrator,
     fit_isotonic_calibrator,
+    fit_venn_abers_calibrator,
     leave_one_year_out_calibration_check,
     reliability_table,
 )
@@ -75,6 +77,59 @@ def test_leave_one_year_out_calibration_check_improves_brier_when_miscalibration
 
     assert set(result["year"]) == set(fold_scores.keys())
     assert (result["isotonic_brier"] < result["raw_brier"]).all()
+
+
+def test_fit_venn_abers_calibrator_recovers_a_known_overconfident_scaling():
+    rng = np.random.default_rng(0)
+    n = 5000
+    y_score = rng.uniform(0, 1, size=n)
+    true_rate = y_score / 10  # same overconfident-by-10x pattern as the isotonic test above
+    y_true = (rng.uniform(0, 1, size=n) < true_rate).astype(int)
+
+    va = fit_venn_abers_calibrator(y_score, y_true)
+    p_prime, _interval_width = apply_venn_abers_calibrator(va, y_score)
+
+    raw_error = np.abs(y_score - true_rate).mean()
+    calibrated_error = np.abs(p_prime - true_rate).mean()
+    assert calibrated_error < raw_error / 3
+
+
+def test_apply_venn_abers_calibrator_widens_the_interval_with_a_smaller_calibration_set():
+    """The multiprobability interval [p0, p1] is Venn-Abers' own signal for thin calibration-set
+    support behind a prediction — docs/06's Venn-Abers proposal (#3) hinges on this actually being
+    true, checked here directly rather than assumed from the paper."""
+    rng = np.random.default_rng(3)
+    y_score_large_cal = rng.uniform(0, 1, size=4000)
+    y_true_large_cal = (rng.uniform(0, 1, size=4000) < y_score_large_cal).astype(int)
+    y_score_small_cal = rng.uniform(0, 1, size=40)
+    y_true_small_cal = (rng.uniform(0, 1, size=40) < y_score_small_cal).astype(int)
+
+    y_test = rng.uniform(0, 1, size=500)
+
+    va_large = fit_venn_abers_calibrator(y_score_large_cal, y_true_large_cal)
+    va_small = fit_venn_abers_calibrator(y_score_small_cal, y_true_small_cal)
+    _p_prime_large, width_large = apply_venn_abers_calibrator(va_large, y_test)
+    _p_prime_small, width_small = apply_venn_abers_calibrator(va_small, y_test)
+
+    assert width_small.mean() > width_large.mean()
+
+
+def test_leave_one_year_out_calibration_check_includes_venn_abers_columns():
+    rng = np.random.default_rng(1)
+    fold_scores = {}
+    for year in range(2017, 2022):
+        n = 1000
+        y_score = rng.uniform(0, 1, size=n)
+        true_rate = y_score / 10
+        y_true = (rng.uniform(0, 1, size=n) < true_rate).astype(int)
+        fold_scores[year] = (y_true, y_score)
+
+    result = leave_one_year_out_calibration_check(fold_scores)
+
+    assert "venn_abers_brier" in result.columns
+    assert "venn_abers_top_bin_ratio" in result.columns
+    assert "venn_abers_mean_interval_width" in result.columns
+    assert (result["venn_abers_mean_interval_width"] > 0).all()
 
 
 def test_leave_one_year_out_calibration_check_can_make_an_already_calibrated_year_worse():

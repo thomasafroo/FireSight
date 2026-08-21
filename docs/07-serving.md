@@ -40,7 +40,7 @@ file on disk changed. Whatever model wins the next round of tuning gets served t
 
 ## The API (`api/main.py`)
 
-Three endpoints:
+Four endpoints:
 
 - `POST /predict` — score one (cell, day)'s worth of *already-computed* feature values, supplied
 directly in the request body. It does **not** fetch live weather or run feature engineering itself —
@@ -54,6 +54,9 @@ model when the caller already has feature values from somewhere else.
 fetching recent weather itself, rather than requiring the caller to supply features or replaying a
 date already in the historical dataset. See [Live weather for
 /predict/live](#live-weather-for-predictlive) below.
+- `GET /predict/explain?cell_id=...&date=YYYY-MM-DD&top_n=6` — the same live fetch `/predict/live`
+does, plus a per-prediction SHAP breakdown of which features drove that one score. See [Explaining a
+live prediction](#explaining-a-live-prediction-predictexplain) below.
 - `GET /risk-map?date=YYYY-MM-DD` — a historical **replay**, not a live forecast: for a date already
 present in `data/processed/kamloops_dataset.parquet`, scores every one of the 1,443 grid cells using
 that date's real recorded weather features, and returns each cell's predicted risk *alongside* its
@@ -168,6 +171,43 @@ an oversight, it's the only thing that works for a file:// frontend. Deploying t
 real origin (a dev server or real hosting) is the point at which `FIRESIGHT_CORS_ORIGINS` should be
 set to that exact origin, not `*`.
 
+### Explaining a live prediction: `/predict/explain`
+
+`evaluation/shap_analysis.py`'s TreeExplainer was originally offline-only (see [Modeling &
+evaluation](06-modeling-and-evaluation.md#2-shap-explainability), which deliberately scoped a live
+endpoint out as a later follow-up). Wired in 2026-08-20: `/predict/explain` fetches the exact same
+live weather + neighbor-fire features `/predict/live` does (via the shared `_resolve_live_features`
+helper both endpoints call, so cell/date validation and error handling can't drift between them),
+scores the row, and additionally runs it through `evaluation/shap_analysis.py::explain` against a
+fixed background sample built once at startup — not per-request, since rebuilding a several-hundred-
+row background sample on every call would be wasted, repeated work for a reference distribution that
+doesn't change between requests.
+
+**The background sample matches the offline analysis's reference distribution, not an ad hoc one.**
+`lifespan` builds it from the same rows `shap_analysis.py`'s own `__main__` uses — fire-season rows
+dated before `TRAIN_END` — sampled down to 300 with the same fixed seed, so a live explanation is
+computed relative to the same "typical training-set conditions" baseline the docs/06 write-up's own
+numbers were, not a baseline that quietly differs deployment-to-deployment. If no processed dataset is
+available on a given deployment (`DATASET_PATH` missing — the same condition `/risk-map` already
+handles), `/predict/explain` returns a 503 rather than fabricating a background sample from nothing.
+
+**Response shape:** `ignition_probability`/`calibrated_probability` (identical fields to
+`/predict/live`) plus `top_contributions` — up to `top_n` `{feature, value, contribution}` entries,
+sorted by `|contribution|` descending. Every `contribution` is in raw `ignition_probability` units,
+signed (positive pushes the score up, negative pushes it down) — there is no SHAP decomposition of
+`calibrated_probability`, since the isotonic calibrator is a separate post-hoc regression fit after the
+tree ensemble, not part of its structure (see docs/06's SHAP section for why). The response's own
+`explanation_note` field restates this, so a caller reading the JSON directly (not this doc) still gets
+the caveat.
+
+**Verified live against a real active fire cluster:** hitting `/predict/explain` for the same cell/date
+combination the `/predict/live` end-to-end check above used (`1106_-1707`, an active FIRMS NRT cluster)
+returned `ignition_probability=0.997` with `neighbor_fire_count_7d` (value 35) as the dominant
+contribution at `+0.557`, followed by `neighbor_fire_count_1d`/`_3d` and then weather features — the
+same "a real fire nearby overwhelms weather-only signal" pattern the offline SHAP write-up's own
+waterfall examples already documented, now reproduced against a genuinely live prediction rather than a
+held-out test row.
+
 ### Calibration: `ignition_probability` vs `calibrated_probability`
 
 `/predict` and `/predict/live` both return `ignition_probability` as a bare float — the obvious
@@ -230,6 +270,21 @@ issuing a second request. Towns outside the modeled bbox (e.g. Lillooet, Lytton,
 `CITIES` list's own comment) still resolve to *some* nearest cell, since the grid has no hard edge to
 stop a nearest-neighbor search at — the UI flags this explicitly (`~29km away — outside the fitted
 grid`) rather than silently presenting a distant cell's number as if it were that town's own risk.
+
+**Click any cell marker for its live risk right now, not just its historical replay value.** Added
+2026-08-20 alongside the `/predict/live`/`/predict/explain` live-forecasting work above — the frontend
+previously only ever called `/risk-map`, so "live forecasting" was a capability the API had but the
+demo couldn't show. Clicking a marker opens a popup with a "Check live risk now" button (lazy-fetched
+on click, not prefetched for every marker on the map: a loaded map can be 1,000+ cells, and each live
+check is its own Open-Meteo + FIRMS NRT round trip server-side, so eagerly fetching all of them would
+be slow and would hammer both upstream APIs for data most cells will never be looked at again). Clicking
+it calls `/predict/live` and `/predict/explain` together (caching the pair per `cell_id`+date so
+reopening the popup doesn't refetch) and renders the live risk, calibrated risk, both data-source
+labels, and the SHAP "Why" breakdown inline in the popup — the same real end-to-end flow verified
+manually via `mcp__claude-in-chrome` against a running `uvicorn` server, not just unit-tested.
+`/predict/explain` returning a 503 (no dataset on this deployment — see [Explaining a live
+prediction](#explaining-a-live-prediction-predictexplain) above) degrades to showing the live risk
+without a "Why" section rather than failing the whole popup.
 
 ## Running it locally
 

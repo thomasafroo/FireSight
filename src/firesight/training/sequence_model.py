@@ -116,6 +116,49 @@ class SequenceCNN(nn.Module):
         return self.fc2(x).squeeze(-1)  # raw logit, shape (batch,)
 
 
+class AttentionPoolSequenceCNN(nn.Module):
+    """`SequenceCNN` with its pooling layer swapped for a learned, per-day softmax-weighted sum.
+
+    Narrower than a full self-attention/Transformer block (see docs/06-modeling-and-evaluation.md
+    #4-attention-pooling-on-the-sequence-model for why that was rejected: this project has twice
+    shown more model capacity backfires here). `conv1`/`conv2` are byte-for-byte unchanged from
+    `SequenceCNN` — only `AdaptiveAvgPool1d(1)` is replaced with one `nn.Linear(hidden_channels*2,
+    1)` scoring each day + a softmax over the time axis, ~66 extra parameters. That isolates a
+    genuinely different, still-open question from the one `SequenceCNN` already answered: does
+    *learning which days to weight* beat uniform averaging, independent of the raw-sequence-vs-
+    rolling-features comparison.
+    """
+
+    def __init__(self, n_channels: int, hidden_channels: int = 16):
+        super().__init__()
+        self.conv1 = nn.Conv1d(n_channels, hidden_channels, kernel_size=5, padding=2)
+        self.conv2 = nn.Conv1d(hidden_channels, hidden_channels * 2, kernel_size=5, padding=2)
+        self.attention_score = nn.Linear(hidden_channels * 2, 1)
+        self.fc1 = nn.Linear(hidden_channels * 2, hidden_channels)
+        self.dropout = nn.Dropout(0.2)
+        self.fc2 = nn.Linear(hidden_channels, 1)
+        # Populated by the most recent forward() call -- (batch, seq_len), softmax-normalized per
+        # row. Exists purely for the interpretability artifact (attention-weight-by-lag-day below);
+        # scoring/training never reads it back.
+        self.last_attention_weights: torch.Tensor | None = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch, seq_len, channels) -> (batch, channels, seq_len), what Conv1d expects.
+        x = x.transpose(1, 2)
+        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.conv2(x))  # (batch, hidden*2, seq_len)
+        x = x.transpose(1, 2)  # (batch, seq_len, hidden*2) -- one feature vector per day
+
+        scores = self.attention_score(x).squeeze(-1)  # (batch, seq_len)
+        weights = torch.softmax(scores, dim=1)
+        self.last_attention_weights = weights.detach()
+
+        pooled = (x * weights.unsqueeze(-1)).sum(dim=1)  # (batch, hidden*2)
+        h = torch.relu(self.fc1(pooled))
+        h = self.dropout(h)
+        return self.fc2(h).squeeze(-1)  # raw logit, shape (batch,)
+
+
 def fit_sequence_cnn(
     train_seq: np.ndarray,
     train_y: np.ndarray,
@@ -125,8 +168,15 @@ def fit_sequence_cnn(
     batch_size: int = 4096,
     lr: float = 1e-3,
     random_state: int = RANDOM_STATE,
-) -> SequenceCNN:
-    """Train `SequenceCNN`, tracking val PR-AUC each epoch and keeping the best-val state dict.
+    model_cls: type[nn.Module] = SequenceCNN,
+) -> nn.Module:
+    """Train `model_cls` (default `SequenceCNN`), tracking val PR-AUC each epoch and keeping the
+    best-val state dict.
+
+    `model_cls` is parameterized (not hardcoded to `SequenceCNN`) so `AttentionPoolSequenceCNN`
+    below can reuse this exact training loop — the docs/06 proposal #4 point of that experiment is
+    to isolate "does the pooling layer matter," so everything else (loss, optimizer, epochs, model
+    selection) must be held identical, not reimplemented in parallel.
 
     `pos_weight` in `BCEWithLogitsLoss` is PyTorch's version of `class_weight="balanced"` elsewhere
     in this project: it's the train fold's own negative/positive ratio, so the loss doesn't just
@@ -137,7 +187,7 @@ def fit_sequence_cnn(
     torch.manual_seed(random_state)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = SequenceCNN(n_channels=train_seq.shape[-1]).to(device)
+    model = model_cls(n_channels=train_seq.shape[-1]).to(device)
     negative = int((train_y == 0).sum())
     positive = int((train_y == 1).sum())
     pos_weight = torch.tensor(negative / max(positive, 1), dtype=torch.float32, device=device)
@@ -251,3 +301,94 @@ if __name__ == "__main__":
     rf = fit_random_forest(train_rows, **BEST_RANDOM_FOREST_PARAMS)
     print("RF val (2023): ", score_model(rf, val_rows), flush=True)
     print("RF test (2024, untouched during training):", score_model(rf, test_rows), flush=True)
+
+    # Attention-pooling experiment (docs/06 proposal #4): cheap, low-risk, pitched as research
+    # completeness/interpretability, not a likely path to beating RandomForest -- this project is
+    # already 2-for-2 against "more model capacity helps" on this data (SequenceCNN above, and an
+    # earlier uncapped-depth RandomForest diagnostic). Reuses the exact same fit_sequence_cnn/
+    # score_sequence_model harness as SequenceCNN, isolating the pooling layer as the one variable.
+    print("\n--- AttentionPoolSequenceCNN ---", flush=True)
+    attn_cnn = fit_sequence_cnn(train_seq, train_y, val_seq, val_y, model_cls=AttentionPoolSequenceCNN)
+    print("Attention-pool val (2023): ", score_sequence_model(attn_cnn, val_seq, val_y), flush=True)
+    print(
+        "Attention-pool test (2024, untouched during training):",
+        score_sequence_model(attn_cnn, test_seq, test_y),
+        flush=True,
+    )
+
+    # Interpretability artifact: does the learned weighting concentrate near the ignition day, or
+    # spread out evenly (== learned to reproduce plain averaging, a negative result per docs/06's
+    # own framing)? Mean attention by lag-day across every real test-set positive, not just a
+    # hand-picked few, so the table isn't cherry-picked toward whichever examples look interesting.
+    device = next(attn_cnn.parameters()).device
+    attn_cnn.eval()
+    with torch.no_grad():
+        test_positive_seq = test_seq[test_y == 1]
+        _ = attn_cnn(torch.from_numpy(test_positive_seq).to(device))
+        mean_attention_by_lag = attn_cnn.last_attention_weights.mean(dim=0).cpu().numpy()
+
+    print(f"\n=== mean attention weight by lag-day, {len(test_positive_seq)} real test-set fires ===", flush=True)
+    uniform_weight = 1.0 / SEQ_LEN
+    lag_table = pd.DataFrame(
+        {
+            "days_before_target": np.arange(SEQ_LEN - 1, -1, -1),
+            "mean_attention": mean_attention_by_lag,
+        }
+    )
+    print(lag_table.to_string(index=False), flush=True)
+    ignition_day_weight = float(mean_attention_by_lag[-1])
+    print(f"\nuniform (plain-averaging) weight per day would be: {uniform_weight:.4f}", flush=True)
+    print(f"learned weight on the ignition day itself (lag 0): {ignition_day_weight:.4f}", flush=True)
+    print(
+        "-> "
+        + (
+            "concentrates near the ignition day: real, learned weighting."
+            if ignition_day_weight > uniform_weight * 1.5
+            else "close to uniform: learned to reproduce plain averaging, a negative result per docs/06 #4."
+        ),
+        flush=True,
+    )
+
+    # Per-fire plot: attention weight vs. day-in-window, for a mix of caught and missed test-set
+    # fires (using this model's own top-10%-by-score cutoff, matching top_k_capture's definition)
+    # -- shows whether the *shape* of the learned weighting differs between fires the model ranks
+    # highly and ones it doesn't, not just the pooled average above.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    with torch.no_grad():
+        test_scores = torch.sigmoid(attn_cnn(torch.from_numpy(test_seq).to(device))).cpu().numpy()
+    top_10pct_cutoff = np.quantile(test_scores, 0.9)
+    positive_idx = np.flatnonzero(test_y == 1)
+    caught_idx = positive_idx[test_scores[positive_idx] >= top_10pct_cutoff]
+    missed_idx = positive_idx[test_scores[positive_idx] < top_10pct_cutoff]
+    rng = np.random.default_rng(0)
+    example_idx = np.concatenate(
+        [
+            rng.choice(caught_idx, size=min(5, len(caught_idx)), replace=False) if len(caught_idx) else [],
+            rng.choice(missed_idx, size=min(5, len(missed_idx)), replace=False) if len(missed_idx) else [],
+        ]
+    ).astype(int)
+
+    with torch.no_grad():
+        _ = attn_cnn(torch.from_numpy(test_seq[example_idx]).to(device))
+        example_weights = attn_cnn.last_attention_weights.cpu().numpy()
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    lag_days = np.arange(SEQ_LEN - 1, -1, -1)
+    for row_pos, weights in zip(example_idx, example_weights):
+        caught = test_scores[row_pos] >= top_10pct_cutoff
+        ax.plot(lag_days, weights, marker="o", markersize=3, alpha=0.7, color="#1d4ed8" if caught else "#b91c1c")
+    ax.plot([], [], color="#1d4ed8", label="caught (top 10%)")
+    ax.plot([], [], color="#b91c1c", label="missed")
+    ax.invert_xaxis()
+    ax.set_xlabel("days before target (0 = ignition day)")
+    ax.set_ylabel("attention weight")
+    ax.set_title("AttentionPoolSequenceCNN: per-fire attention weight by lag-day")
+    ax.legend()
+    out_path = DATASET_PATH.parent / "attention_weights_by_fire.png"
+    fig.savefig(out_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    print(f"\nsaved {out_path}", flush=True)
