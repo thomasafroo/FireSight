@@ -58,11 +58,39 @@ FEATURE_COLUMNS: list[str] = [
     # neighbors that ignited in the trailing N days (features/engineering.py::
     # add_neighbor_fire_features), the fire-season spread-dynamics feature proposed in
     # docs/06-modeling-and-evaluation.md#1-spatial-lag-features-neighbor-cells-recent-fire-history.
-    # Not yet a promoted feature of the served model — added here only so advanced_models.py's
-    # tuning search can evaluate it, same staging cape/convective_precip_mm went through above.
+    # Promoted the same day (see export_model.py's history) after refitting BEST_RANDOM_FOREST_PARAMS
+    # unchanged on the resulting 13-column set was a huge, real jump on test — this is part of what
+    # the served model actually uses now, not just a staged tuning candidate.
     "neighbor_fire_count_1d",
     "neighbor_fire_count_3d",
     "neighbor_fire_count_7d",
+    # fuel_type_* (19 one-hot columns, features/fuel_type.py) added 2026-08-21 after a per-group
+    # ablation isolated it as the only real contributor from that session's FWI/terrain/fuel-type
+    # batch (see docs/06-modeling-and-evaluation.md#closing-the-feature-category-gap-fwi-terrain-
+    # and-fuel-type-2026-08-21) -- FWI and terrain were each neutral in isolation and actively hurt
+    # when combined with fuel_type, so only fuel_type was promoted. Exact literal list, not
+    # discovered dynamically from the dataset at import time: which codes exist is a property of
+    # the Kamloops FC extract `features/fuel_type.py` already cached, and the served model needs a
+    # fixed input schema regardless of what a future re-fetch might return.
+    "fuel_type_C-2",
+    "fuel_type_C-3",
+    "fuel_type_C-4",
+    "fuel_type_C-5",
+    "fuel_type_C-6",
+    "fuel_type_C-7",
+    "fuel_type_D-1/D-2",
+    "fuel_type_M-1/M-2 (20 PC)",
+    "fuel_type_M-1/M-2 (25 PC)",
+    "fuel_type_M-1/M-2 (30 PC)",
+    "fuel_type_M-1/M-2 (40 PC)",
+    "fuel_type_M-1/M-2 (45 PC)",
+    "fuel_type_M-1/M-2 (50 PC)",
+    "fuel_type_M-1/M-2 (55 PC)",
+    "fuel_type_M-1/M-2 (65 PC)",
+    "fuel_type_M-1/M-2 (Burned)",
+    "fuel_type_Non-fuel",
+    "fuel_type_O-1a",
+    "fuel_type_S-2",
 ]
 LABEL_COLUMN = "ignited"
 DATE_COLUMN = "date"
@@ -129,9 +157,14 @@ def fit_logistic_regression(train: pd.DataFrame) -> Pipeline:
     return model
 
 
-def score_model(model, df: pd.DataFrame) -> dict[str, float]:
-    """Score a fitted classifier against pr_auc/roc_auc/top_10pct_capture."""
-    y_true = df[LABEL_COLUMN].to_numpy()
+def score_model(model, df: pd.DataFrame, label_column: str = LABEL_COLUMN) -> dict[str, float]:
+    """Score a fitted classifier against pr_auc/roc_auc/top_10pct_capture.
+
+    `label_column` defaults to the same-day `ignited` label; pass e.g. `"ignited_next_3d"` to score
+    against the multi-day-ahead label instead (see `features/labels.py::add_forward_ignition_label`)
+    — same `columns` override pattern `drop_incomplete_history` already uses.
+    """
+    y_true = df[label_column].to_numpy()
     y_score = model.predict_proba(df[FEATURE_COLUMNS])[:, 1]
     return {
         "pr_auc": pr_auc(y_true, y_score),

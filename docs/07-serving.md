@@ -70,11 +70,11 @@ helper, before doing any lookup or fetch. The served model is trained exclusivel
 [Modeling & evaluation](06-modeling-and-evaluation.md#known-limitation-a-wintershoulder-season-blind-spot)),
 so scoring a December date would just be extrapolating from a model that has never seen a single
 winter row — silently wrong rather than usefully wrong. `/predict` still has no equivalent guard: its
-request body is a raw feature vector with no date or day-of-year field at all (`FEATURE_COLUMNS` is
-pure weather), so there's nothing date-shaped to validate against — a caller could still hand-construct
-an out-of-season feature vector and get a number back. That's an accepted gap for the raw-vector
-endpoint specifically, not something `/predict/live` inherits, since `/predict/live` always knows the
-date it's scoring.
+request body is a raw feature vector with no date or day-of-year field at all (`FEATURE_COLUMNS` has no
+date/season field among weather, spatial-lag, and fuel-type columns alike), so there's nothing
+date-shaped to validate against — a caller could still hand-construct an out-of-season feature vector
+and get a number back. That's an accepted gap for the raw-vector endpoint specifically, not something
+`/predict/live` inherits, since `/predict/live` always knows the date it's scoring.
 
 ### Live weather for `/predict/live`
 
@@ -162,6 +162,24 @@ real, live-data-driven contrast, not a historical replay. `/predict` (a caller-s
 vector) and `/risk-map` (historical replay from the already-joined parquet) were already unaffected by
 the original breakage and are unchanged by this fix.
 
+**Fuel type for `/predict/live`, added 2026-08-21: a cache lookup, not a third live-data source.**
+Once the per-group ablation in [Modeling &
+evaluation](06-modeling-and-evaluation.md#closing-the-feature-category-gap-fwi-terrain-and-fuel-type-2026-08-21)
+promoted the 19 `fuel_type_*` columns into `FEATURE_COLUMNS`, `/predict/live` needed a way to fill
+them — but unlike weather or fire detections, fuel type is static per cell (`features/fuel_type.py`'s
+module docstring: it doesn't change day to day short of an actual burn), so there's no live WFS query
+to make at request time. `features/live_fuel_type.py::build_live_fuel_type_features` instead looks up
+the cell's already-cached code from `data/raw/fuel_type/kamloops_fuel_type.parquet` — the exact cache
+`pipeline/build_dataset.py` already populated for training, covering every cell in the same
+`BC_KAMLOOPS_BBOX` grid `/predict/live` serves, since a live cell can never be outside the grid
+training used — and one-hots it against the served model's exact `fuel_type_*` columns. A code with no
+matching column (e.g. a cell whose fuel type was never mapped, or — if this project's grid ever
+changed — a code that never occurred in the current training extract) falls back to all-zero, the same
+"unseen class is dead weight, not an error" behavior `encode_fuel_type_features` already established
+for training. `lifespan` loads this cache once at startup — a required file dependency once
+`fuel_type_*` is part of the served model, the same way `MODEL_BUNDLE_PATH` already is, raising at
+startup (not failing every request individually) if it's missing.
+
 **CORS defaults to wide open** (`allow_origins=["*"]`), but is now configurable via the
 `FIRESIGHT_CORS_ORIGINS` env var (comma-separated list of allowed origins) rather than hardcoded —
 set it before any real deployment. The `*` default stays correct for local dev specifically because
@@ -170,6 +188,48 @@ all; an explicit allowlist has nothing to match against in that case, so the per
 an oversight, it's the only thing that works for a file:// frontend. Deploying the frontend behind a
 real origin (a dev server or real hosting) is the point at which `FIRESIGHT_CORS_ORIGINS` should be
 set to that exact origin, not `*`.
+
+### `/predict/live/multi-day`: the 3-day-ahead endpoint
+
+Added 2026-08-21 alongside `features/labels.py::add_forward_ignition_label` and
+`training/export_model.py::export_multi_day_model` — see [Grid &
+labels](03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21) and [Modeling &
+evaluation](06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21) for how the
+label and this endpoint's model were built and validated. `GET /predict/live/multi-day?cell_id=&date=`
+answers a different question than `/predict/live`: not "will this cell ignite *today*," but "will it
+ignite at some point in the next `MULTI_DAY_WINDOW` (3) days" — scored through a **second**,
+independently-exported `ModelBundle`, not a parameter on the same model.
+
+**Reuses everything about live data sourcing, changes only which model scores it.** The endpoint
+calls the exact same `_resolve_live_features` helper `/predict/live`/`/predict/explain` already share
+— same Open-Meteo weather fetch, same FIRMS NRT neighbor-fire count, same fuel-type cache lookup —
+since the multi-day model was trained on the identical `FEATURE_COLUMNS`. Nothing about *fetching*
+live conditions changes for a wider prediction window; only the label the model was fit against does.
+
+**Optional, unlike the primary model.** `lifespan` loads `data/processed/model_3day.joblib` (or
+`FIRESIGHT_MULTI_DAY_MODEL_PATH`) if present, but — unlike `MODEL_BUNDLE_PATH`, whose absence is a
+startup `RuntimeError` — a missing multi-day bundle just means `state["multi_day_bundle"]` is `None`
+and the endpoint 503s with instructions to run `export_multi_day_model()`. A fresh self-host that's
+only run `training/export_model.py`'s `__main__` (which now exports both bundles) gets this endpoint
+automatically; one that's only run `export_current_best()` directly does not, and that's fine — the
+same-day model and every other endpoint work regardless. `/health`'s `multi_day_model_loaded` field
+reports which state a given deployment is in.
+
+**Reachable from the map, not just the API.** `frontend/index.html`'s cell popup has a "Live risk"
+row with a "Today" / "Next N days" dropdown next to its "Check" button; picking the second option
+calls this endpoint instead of `/predict/live` and renders `window_days` as an explicit "not
+calibrated yet" note. No SHAP explanation is fetched for the multi-day option — `/predict/explain`'s
+background/model is the same-day bundle only, so attaching it to a multi-day prediction would
+misattribute the explanation to the wrong model.
+
+**No `calibrated_probability` field.** `export_multi_day_model` doesn't attach a calibrator — see its
+docstring for why (the pooled leave-one-year-out methodology `export_current_best` uses depends on
+`evaluation/backtest.py::run_rolling_origin_backtest`, hardcoded to the same-day label) — so this
+endpoint's response has `ignition_probability` and `window_days` but no calibrated counterpart, a real,
+documented gap rather than a silently-missing field. `ignition_probability` here carries the same
+honest caveat [Calibration](#calibration-ignition_probability-vs-calibrated_probability) below
+describes for the same-day model — a relative ranking, not a literal probability — plus the
+independently-measured accuracy gap versus same-day prediction docs/06's write-up quantifies.
 
 ### Explaining a live prediction: `/predict/explain`
 
@@ -244,9 +304,17 @@ using `calibrated_probability` for ranking would just be a slower way to get the
 
 A single static HTML file (Leaflet via CDN, vanilla JS, no build step, no framework) — deliberately
 minimal, per the project's stated MVP scope (prove the loop works end-to-end on Kamloops before
-scaling up or polishing). It renders one circle marker per grid cell, colored by predicted risk and
-outlined for cells with a real recorded ignition that day, by calling `/risk-map` directly from the
-browser.
+scaling up or polishing). It renders one `L.rectangle` per grid cell — sized to the real 5km cell
+footprint (mirroring `features/grid.py::cell_size_degrees`'s math in JS, not a fixed-pixel marker),
+colored by predicted risk, outlined with a thin black border so adjacent cells read as a grid, and
+overridden with a thicker blue border for cells with a real recorded ignition that day — by calling
+`/risk-map` directly from the browser. Real-sized squares matter specifically because a fixed-pixel
+marker (the original `L.circleMarker` this replaced) stays a constant screen size regardless of zoom,
+so it shrinks to an uninformative speck relative to the grid the moment you zoom in past the map's
+initial extent; a geometry-sized square scales with the map instead. Cell fill uses `fillOpacity: 0.55`
+rather than a more saturated value, deliberately low enough that roads, place labels, rivers, and
+terrain shading stay legible underneath the risk color — the base map is part of how a reader locates
+a risky cell relative to a real place, not just decoration behind the data.
 
 **Why risk is colored relative to that day's own maximum, not a fixed 0–1 scale:** two independent
 reasons, one about the underlying rarity of fires and one about the model's raw output specifically.
@@ -274,17 +342,19 @@ grid`) rather than silently presenting a distant cell's number as if it were tha
 **Click any cell marker for its live risk right now, not just its historical replay value.** Added
 2026-08-20 alongside the `/predict/live`/`/predict/explain` live-forecasting work above — the frontend
 previously only ever called `/risk-map`, so "live forecasting" was a capability the API had but the
-demo couldn't show. Clicking a marker opens a popup with a "Check live risk now" button (lazy-fetched
+demo couldn't show. Clicking a marker opens a popup with a "Check" button (lazy-fetched
 on click, not prefetched for every marker on the map: a loaded map can be 1,000+ cells, and each live
 check is its own Open-Meteo + FIRMS NRT round trip server-side, so eagerly fetching all of them would
 be slow and would hammer both upstream APIs for data most cells will never be looked at again). Clicking
 it calls `/predict/live` and `/predict/explain` together (caching the pair per `cell_id`+date so
-reopening the popup doesn't refetch) and renders the live risk, calibrated risk, both data-source
-labels, and the SHAP "Why" breakdown inline in the popup — the same real end-to-end flow verified
-manually via `mcp__claude-in-chrome` against a running `uvicorn` server, not just unit-tested.
+reopening the popup doesn't refetch) and renders the live risk, both data-source labels, and the SHAP
+"Why" breakdown inline in the popup — the same real end-to-end flow verified manually via
+`mcp__claude-in-chrome` against a running `uvicorn` server, not just unit-tested.
 `/predict/explain` returning a 503 (no dataset on this deployment — see [Explaining a live
 prediction](#explaining-a-live-prediction-predictexplain) above) degrades to showing the live risk
-without a "Why" section rather than failing the whole popup.
+without a "Why" section rather than failing the whole popup. `calibrated_probability` is fetched but
+deliberately not displayed here (or anywhere in the popup/tooltip) — decluttering, not a data change;
+the API still returns it for anyone consuming it directly.
 
 ## Running it locally
 

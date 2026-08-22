@@ -28,7 +28,10 @@ baseline-first methodology, the metrics used instead of accuracy, and real resul
 Dummy/LogisticRegression/RandomForest/XGBoost.
 7. [Serving](07-serving.md) — persisting a model safely, the FastAPI inference/demo endpoints, and
 the minimal frontend risk map.
-8. [Glossary](glossary.md) — every term used across these pages, defined once.
+8. [Future directions & open questions](08-future-directions.md) — what's deliberately deferred (BC
+expansion, multi-day calibration, lightning data) versus explicitly out of scope (fire-spread
+modeling, auth), and why.
+9. [Glossary](glossary.md) — every term used across these pages, defined once.
 
 ## How this guide stays honest
 

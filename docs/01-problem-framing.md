@@ -8,6 +8,13 @@ narrower and defined per **(grid cell, day)**:
 > Given conditions up to and including day *D*, in grid cell *C*, will a real vegetation fire be
 > detected in that cell on day *D* (or, once the model matures, within the next *N* days)?
 
+**Update 2026-08-21: the multi-day-ahead extension was tried.** `ignited_next_3d`
+([Grid & labels](03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21)) is a real,
+working label with skill well above the dummy floor, but a genuine accuracy gap versus same-day
+prediction — see [Modeling &
+evaluation](06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21) for the full
+result. Validated, not yet served.
+
 That's a **binary classification** problem, not regression: the label (`ignited`) is 0 or 1, not a
 continuous quantity. We're not predicting *how big* a fire will be or *how much* area burns — just
 whether ignition is detected at all. Fire size/spread modeling is a different (harder) problem,

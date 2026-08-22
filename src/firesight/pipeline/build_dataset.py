@@ -21,7 +21,11 @@ from firesight.features.engineering import (
 from firesight.features.fuel_type import build_fuel_type_features
 from firesight.features.fwi import compute_fwi
 from firesight.features.grid import assign_cell_ids, build_grid_cells
-from firesight.features.labels import build_label_scaffold, filter_real_fires
+from firesight.features.labels import (
+    add_forward_ignition_label,
+    build_label_scaffold,
+    filter_real_fires,
+)
 from firesight.features.topography import build_topography_features
 from firesight.features.weather import join_weather, load_era5_daily
 from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
@@ -34,6 +38,13 @@ OUT_PATH = Path("data/processed/kamloops_dataset.parquet")
 START_DATE = "2012-01-01"
 END_DATE = "2024-12-31"
 CELL_SIZE_KM = 5.0
+
+# Multi-day-ahead label window (features/labels.py::add_forward_ignition_label) -- an experimental,
+# not-yet-served parallel label alongside `ignited`, staged into the dataset the same way
+# cape/convective_precip_mm and FWI/terrain/fuel-type were before being evaluated (see
+# docs/06-modeling-and-evaluation.md). 3 days: matches neighbor_fire_count's shortest tested window,
+# short enough to stay a distinct, urgent signal rather than blurring into "is it fire season."
+MULTI_DAY_WINDOW = 3
 
 
 def build(
@@ -50,6 +61,9 @@ def build(
 
     grid_cells = build_grid_cells(BC_KAMLOOPS_BBOX, cell_size_km=cell_size_km)
     scaffold = build_label_scaffold(fire, grid_cells, start_date, end_date)
+    # Needs the scaffold's dense (every cell x every date) panel, same requirement
+    # add_neighbor_fire_features has -- computed here, before any join/drop could introduce gaps.
+    scaffold = add_forward_ignition_label(scaffold, n_days=MULTI_DAY_WINDOW)
 
     era5_paths = sorted(era5_dir.glob("*.nc"))
     era5_daily = load_era5_daily(era5_paths)

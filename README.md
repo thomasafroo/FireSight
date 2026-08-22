@@ -44,7 +44,31 @@ evaluation](docs/06-modeling-and-evaluation.md#scoping-to-fire-season).
 **Decided:** staying scoped to the Kamloops Fire Centre rather than scaling to all of BC. A larger
 bbox means a much bigger grid, more raw FIRMS/ERA5-Land volume, and a per-row reference-latitude
 approximation in `features/grid.py` that would need correcting — deliberately kept out of scope for
-this project rather than backed into.
+this project rather than backed into. See [Future directions](docs/08-future-directions.md) for what
+that expansion would actually require (including whether Kamloops' one-model approach even makes sense
+across BC's different fire-climate regions) and the project's other open/deferred questions.
+
+**Fuel type added to the served model, FWI and terrain tried but not promoted.** A competitive-
+landscape review found FireSight was weather-only, missing the single largest input category
+reported across published wildfire-ML studies (fuel/vegetation state). All three were added and
+benchmarked together first (mixed-to-negative), then re-tested individually — fuel type (BC's
+Provincial Fuel Type Layer, one-hot per FBP class) is a clean, real win on its own; the Canadian FWI
+System and terrain (elevation/slope/aspect) are each neutral alone and were actively diluting fuel
+type's signal when combined. Only fuel type is in the served model now. See [Modeling &
+evaluation](docs/06-modeling-and-evaluation.md#closing-the-feature-category-gap-fwi-terrain-and-fuel-type-2026-08-21).
+
+**Multi-day-ahead prediction added: `GET /predict/live/multi-day`, also in the map UI.** A second,
+independently-exported model scores `ignited_next_3d` (a real fire anywhere in the next 3 days, not
+just today) using the exact same features and hyperparameters as the same-day model. It clears the
+dummy floor by a wide margin, but carries a genuine ~24% relative test PR-AUC gap versus same-day
+prediction — expected for a harder target using the same information, not a bug — and has no
+calibrated probability yet (a real, documented gap, not an oversight). A hyperparameter retune made it
+worse, not better (a val-only overfit), so the original same-day-tuned params were kept. The frontend's
+cell popup has a "today" / "next 3 days" toggle next to its live-risk button, so this isn't just a raw
+API endpoint — it's clickable on the map. See [Grid &
+labels](docs/03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21), [Modeling &
+evaluation](docs/06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21), and
+[Serving](docs/07-serving.md#predictlivemulti-day-the-3-day-ahead-endpoint).
 
 **Known limitation:** `ignition_probability` (from `/predict` and `/predict/live`) is a reliable
 *relative* risk ranking but not a calibrated probability — a cell scored ~85% actually ignites about

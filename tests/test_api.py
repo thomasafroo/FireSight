@@ -41,6 +41,9 @@ def _build_client(tmp_path, monkeypatch, calibrator=None):
     dataset.to_parquet(dataset_path)
 
     monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    # A path guaranteed not to exist, so these tests stay isolated from whatever the real
+    # data/processed/model_3day.joblib on disk happens to contain (or whether it exists at all).
+    monkeypatch.setenv("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(tmp_path / "no_multi_day_model_here.joblib"))
     monkeypatch.setenv("FIRESIGHT_DATASET_PATH", str(dataset_path))
 
     # import after env vars are set, and after reloading module-level state
@@ -173,6 +176,9 @@ def test_predict_live_merges_neighbor_fire_counts_into_the_scored_feature_row(tm
     model_path = tmp_path / "model.joblib"
     save_model_bundle(bundle, model_path)
     monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    # A path guaranteed not to exist, so these tests stay isolated from whatever the real
+    # data/processed/model_3day.joblib on disk happens to contain (or whether it exists at all).
+    monkeypatch.setenv("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(tmp_path / "no_multi_day_model_here.joblib"))
     monkeypatch.delenv("FIRESIGHT_DATASET_PATH", raising=False)
 
     import importlib
@@ -190,6 +196,70 @@ def test_predict_live_merges_neighbor_fire_counts_into_the_scored_feature_row(tm
         response = test_client.get("/predict/live", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
     assert response.status_code == 200
     assert 0.0 <= response.json()["ignition_probability"] <= 1.0
+
+
+def test_predict_live_multi_day_503s_when_no_multi_day_model_is_loaded(client):
+    """The `client` fixture's env points FIRESIGHT_MULTI_DAY_MODEL_PATH at a path guaranteed not to
+    exist (see _build_client) -- this is the default, not-yet-exported-on-this-deployment case."""
+    response = client.get("/predict/live/multi-day", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 503
+
+
+@pytest.fixture
+def multi_day_client(tmp_path, monkeypatch):
+    """Same shape as `client`, but with a second, real multi-day bundle also loaded."""
+    train = pd.DataFrame({"t2m": [270.0, 300.0, 271.0, 299.0], "precip_mm": [0.0, 0.0, 5.0, 1.0], "y": [0, 1, 0, 1]})
+    model = LogisticRegression().fit(train[FEATURES], train["y"])
+    bundle = ModelBundle(model=model, feature_columns=FEATURES, metadata={"model_type": "LogisticRegression"})
+    model_path = tmp_path / "model.joblib"
+    save_model_bundle(bundle, model_path)
+
+    multi_day_model = LogisticRegression().fit(train[FEATURES], train["y"])
+    multi_day_bundle = ModelBundle(
+        model=multi_day_model,
+        feature_columns=FEATURES,
+        metadata={"model_type": "LogisticRegression", "val_scores": {"pr_auc": 0.3}},
+    )
+    multi_day_model_path = tmp_path / "model_3day.joblib"
+    save_model_bundle(multi_day_bundle, multi_day_model_path)
+
+    monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    monkeypatch.setenv("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(multi_day_model_path))
+    monkeypatch.delenv("FIRESIGHT_DATASET_PATH", raising=False)
+
+    import importlib
+
+    import api.main as main_module
+
+    importlib.reload(main_module)
+    with TestClient(main_module.app) as test_client:
+        yield test_client
+
+
+def test_health_reports_multi_day_model_loaded(multi_day_client):
+    response = multi_day_client.get("/health")
+    body = response.json()
+    assert body["multi_day_model_loaded"] is True
+    assert body["multi_day_val_scores"] == {"pr_auc": 0.3}
+
+
+def test_predict_live_multi_day_returns_a_probability_for_a_valid_cell(multi_day_client, monkeypatch):
+    import api.main as main_module
+
+    _patch_live_fetches(monkeypatch, main_module)
+    response = multi_day_client.get("/predict/live/multi-day", params={"cell_id": A_REAL_CELL_ID, "date": "2024-07-15"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cell_id"] == A_REAL_CELL_ID
+    assert body["date"] == "2024-07-15"
+    assert body["window_days"] == 3
+    assert 0.0 <= body["ignition_probability"] <= 1.0
+    assert "calibrated_probability" not in body
+
+
+def test_predict_live_multi_day_404s_for_an_unknown_cell(multi_day_client):
+    response = multi_day_client.get("/predict/live/multi-day", params={"cell_id": "not-a-real-cell", "date": "2024-07-15"})
+    assert response.status_code == 404
 
 
 def test_predict_live_404s_for_an_unknown_cell(client):
@@ -281,6 +351,9 @@ def _build_explain_client(tmp_path, monkeypatch):
     dataset.to_parquet(dataset_path)
 
     monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    # A path guaranteed not to exist, so these tests stay isolated from whatever the real
+    # data/processed/model_3day.joblib on disk happens to contain (or whether it exists at all).
+    monkeypatch.setenv("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(tmp_path / "no_multi_day_model_here.joblib"))
     monkeypatch.setenv("FIRESIGHT_DATASET_PATH", str(dataset_path))
 
     import importlib
@@ -328,6 +401,9 @@ def test_predict_explain_503s_when_no_dataset_is_available_for_a_background_samp
     save_model_bundle(bundle, model_path)
 
     monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    # A path guaranteed not to exist, so these tests stay isolated from whatever the real
+    # data/processed/model_3day.joblib on disk happens to contain (or whether it exists at all).
+    monkeypatch.setenv("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(tmp_path / "no_multi_day_model_here.joblib"))
     # A path guaranteed not to exist, not delenv -- delenv would fall back to the module's real
     # default (data/processed/kamloops_dataset.parquet), which does exist in this checkout.
     monkeypatch.setenv("FIRESIGHT_DATASET_PATH", str(tmp_path / "no_dataset_here.parquet"))
@@ -408,6 +484,9 @@ def test_cors_honors_explicit_allowlist(tmp_path, monkeypatch):
     save_model_bundle(bundle, model_path)
 
     monkeypatch.setenv("FIRESIGHT_MODEL_PATH", str(model_path))
+    # A path guaranteed not to exist, so these tests stay isolated from whatever the real
+    # data/processed/model_3day.joblib on disk happens to contain (or whether it exists at all).
+    monkeypatch.setenv("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(tmp_path / "no_multi_day_model_here.joblib"))
     monkeypatch.delenv("FIRESIGHT_DATASET_PATH", raising=False)
     monkeypatch.setenv("FIRESIGHT_CORS_ORIGINS", "https://firesight.example.com")
 

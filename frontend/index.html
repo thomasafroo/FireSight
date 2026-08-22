@@ -77,7 +77,7 @@
   #legend .scale { display: flex; justify-content: space-between; width: 160px; }
   #legend .actual { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
   #legend .actual .dot {
-    width: 10px; height: 10px; border-radius: 50%; background: transparent;
+    width: 10px; height: 10px; border-radius: 2px; background: transparent;
     border: 2px solid #1d4ed8;
   }
   #github-link {
@@ -88,14 +88,58 @@
   }
   #github-link:hover { background: #f0f0f0; }
   #github-link svg { width: 20px; height: 20px; fill: #222; }
-  .cell-popup { font-size: 12px; max-width: 230px; }
-  .cell-popup .live-btn {
-    width: 100%; font-size: 12px; padding: 4px 6px; margin-top: 6px; cursor: pointer;
+  .cell-popup { font-size: 12px; max-width: 250px; }
+  .cell-popup .title { font-size: 15px; font-weight: 700; color: #17181c; line-height: 1.25; }
+  .cell-popup .subtitle { font-size: 11px; color: #000000; margin: 1px 0 8px; }
+  .cell-popup .risk-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
+  .cell-popup .risk-row + .risk-row { margin-top: 4px; }
+  .cell-popup .risk-row-label { color: #444; }
+  .cell-popup .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px; font-weight: 700;
+    font-size: 12px; white-space: nowrap;
+  }
+  .cell-popup .calibrated-note { font-size: 11px; color: #888; margin-top: 3px; }
+  .cell-popup .fire-flag {
+    margin-top: 8px; font-weight: 600; color: #17181c;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .cell-popup .fire-flag .dot {
+    width: 9px; height: 9px; border-radius: 2px; border: 2px solid #1d4ed8;
+    background: transparent; flex: none;
+  }
+  .cell-popup hr { border: none; border-top: 1px solid #e8e8ec; margin: 10px 0; }
+  .cell-popup .live-panel {
+    margin-top: 4px; padding: 8px; background: #f5f6fa; border: 1px solid #e8e9f0;
+    border-radius: 8px;
+  }
+  .cell-popup .live-row { display: flex; align-items: center; gap: 6px; }
+  .cell-popup .live-label { font-weight: 600; color: #17181c; white-space: nowrap; }
+  .cell-popup .live-window {
+    flex: 1; min-width: 0; font-size: 12px; padding: 4px; box-sizing: border-box;
+    border: 1px solid #d5d7e0; border-radius: 5px; background: #fff;
+  }
+  .cell-popup .live-btn {
+    font-size: 12px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
+    border: 1px solid #c7c9d4; border-radius: 5px; background: #fff;
+  }
+  .cell-popup .live-btn:hover:not(:disabled) { background: #eef0f8; }
   .cell-popup .live-btn:disabled { cursor: default; opacity: 0.6; }
-  .cell-popup .live-result { margin-top: 6px; }
+  .cell-popup .live-result { margin-top: 8px; }
+  .cell-popup .live-result .why { margin-top: 6px; }
   .cell-popup .live-result ul { margin: 4px 0 0; padding-left: 16px; }
-  .cell-popup .live-source { color: #777; }
+  .cell-popup .live-source { color: #888; font-size: 11px; }
+  .leaflet-tooltip.cell-tooltip {
+    font-size: 12px; padding: 6px 9px; border-radius: 6px; line-height: 1.45;
+  }
+  .cell-tooltip .tt-title { font-weight: 700; color: #17181c; }
+  .cell-tooltip .tt-badge {
+    display: inline-block; padding: 1px 8px; border-radius: 999px; font-weight: 700;
+    font-size: 11px; margin-top: 3px;
+  }
+  .cell-tooltip .tt-fire { color: #17181c; font-weight: 600; }
+  .cell-tooltip .tt-hint { color: #000; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -157,8 +201,27 @@
   const map = L.map("map").setView([50.6745, -120.3273], 8);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap contributors",
-    maxZoom: 12,
+    maxZoom: 19, // the standard OSM raster tile server's own max, not an app-specific limit
   }).addTo(map);
+
+  // Mirrors features/grid.py::cell_size_degrees/KM_PER_DEGREE_LAT and build_grid_cells' defaults
+  // (cell_size_km=5.0, reference_latitude=50.6) -- needed to draw each cell as an actual square
+  // the size of the real 5km grid cell it represents, not an arbitrary fixed-pixel marker that
+  // shrinks to a dot relative to the grid as soon as you zoom in past the map's initial extent.
+  const KM_PER_DEGREE_LAT = 111.0;
+  const CELL_SIZE_KM = 5.0;
+  const GRID_REFERENCE_LATITUDE = 50.6;
+  const CELL_LAT_SIZE = CELL_SIZE_KM / KM_PER_DEGREE_LAT;
+  const CELL_LON_SIZE = CELL_SIZE_KM / (KM_PER_DEGREE_LAT * Math.cos((GRID_REFERENCE_LATITUDE * Math.PI) / 180));
+
+  // `row.latitude`/`row.longitude` from /risk-map and /predict/live are always a cell's centroid
+  // (see build_grid_cells), so the square is just that centroid plus/minus half the cell size.
+  function cellBounds(lat, lon) {
+    return [
+      [lat - CELL_LAT_SIZE / 2, lon - CELL_LON_SIZE / 2],
+      [lat + CELL_LAT_SIZE / 2, lon + CELL_LON_SIZE / 2],
+    ];
+  }
 
   // Towns in/near the Kamloops Fire Centre bbox (-121.5,49.8,-119.0,51.5). Purely a map
   // navigation aid; recenters the view client-side, independent of /risk-map and the
@@ -189,6 +252,10 @@
   const MAX_DATE = "2024-12-30";
   const FIRE_SEASON_START_MD = "05-01";
   const FIRE_SEASON_END_MD = "10-15";
+  // Mirrors pipeline/build_dataset.py::MULTI_DAY_WINDOW -- only used for the popup's dropdown
+  // label; the real window size in any given response comes from /predict/live/multi-day's own
+  // `window_days` field, so a drift here would be cosmetic, not a correctness bug.
+  const MULTI_DAY_WINDOW = 3;
   const MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -365,7 +432,10 @@
     if (!document.getElementById("date-field").contains(e.target)) hideCalendar();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") hideCalendar();
+    if (e.key === "Escape") {
+      hideCalendar();
+      map.closePopup();
+    }
   });
 
   // Rough km distance for display only (not fed into the model); fine at this region's
@@ -484,7 +554,10 @@
   function updateSuggestions() {
     const query = cityInput.value.trim().toLowerCase();
     if (!query) {
-      renderSuggestions([]);
+      // Clicking/focusing an empty field browses the full served-cities list (scrollable via
+      // #city-suggestions' own max-height) rather than showing nothing until you start typing --
+      // typing still narrows it down through the ranked filter below.
+      renderSuggestions(CITIES);
       return;
     }
     // Prefix matches ("closest" to what's typed) ranked ahead of mid-string matches,
@@ -556,6 +629,18 @@
     return "rgb(189, 0, 38)";
   }
 
+  // Inline style for a colored risk badge (used in popups, not the map markers): reuses
+  // riskColor's exact scale so a badge's color always means the same thing a marker's fill color
+  // does, then picks readable text color off the fill's own perceived brightness (the scale spans
+  // pale yellow through deep red, so a single fixed text color would be unreadable at one end).
+  function riskBadgeStyle(p) {
+    const fill = riskColor(p);
+    const [r, g, b] = fill.match(/\d+/g).map(Number);
+    const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+    const textColor = brightness > 150 ? "#1a1a1a" : "#fff";
+    return `background:${fill};color:${textColor};`;
+  }
+
   // Live-risk popups: lazy-fetched on click (not prefetched for every marker) -- one grid cell
   // load can be ~1000s of cells, and each live check is its own Open-Meteo + FIRMS NRT round
   // trip server-side, so fetching all of them eagerly would be slow and hammer both APIs for
@@ -567,46 +652,99 @@
 
   const liveCache = {}; // `${cellId}|${dateStr}` -> {live, explain}
 
-  function cellPopupHtml(row) {
-    const calibratedNote = row.calibrated_risk_probability != null
-      ? `<br/>calibrated: ~${(row.calibrated_risk_probability * 100).toFixed(3)}%`
+  // Same coordinates-first, badge-colored treatment as cellPopupHtml below, just compact enough
+  // for a hover tooltip -- no cell_id at all here, since a tooltip is a glance, not the place a
+  // reader needs the raw grid identifier the popup's live-risk request actually uses.
+  function cellTooltipHtml(row, normalized) {
+    const fireFlag = row.actual_ignited ? `<div class="tt-fire">fire detected here</div>` : "";
+    return `
+      <div class="tt-title">${row.latitude.toFixed(3)}°N, ${Math.abs(row.longitude).toFixed(3)}°W</div>
+      <span class="tt-badge" style="${riskBadgeStyle(normalized)}">${(row.risk_probability * 100).toFixed(3)}%</span>
+      ${fireFlag}
+      <div class="tt-hint">click for live risk</div>
+    `;
+  }
+
+  // Coordinates, not the raw "row_col" cell_id, lead the popup -- cell_id is real and needed
+  // for the live-risk request below, but it means nothing to a reader who isn't this project's
+  // own grid code, so it's demoted to a small subtitle instead of the heading.
+  function cellPopupHtml(row, normalized) {
+    const fireFlag = row.actual_ignited
+      ? `<div class="fire-flag"><span class="dot"></span>fire detected here</div>`
       : "";
     return `
       <div class="cell-popup">
-        <strong>cell ${row.cell_id}</strong><br/>
-        risk on ${selectedDate}: ${(row.risk_probability * 100).toFixed(3)}%${calibratedNote}
-        ${row.actual_ignited ? "<br/><strong>fire detected here</strong>" : ""}
-        <hr style="margin:6px 0;" />
-        <button type="button" class="live-btn" data-cell="${row.cell_id}">Check live risk now</button>
-        <div class="live-result"></div>
+        <div class="title">${row.latitude.toFixed(3)}°N, ${Math.abs(row.longitude).toFixed(3)}°W</div>
+        
+        <div class="risk-row">
+          <span class="risk-row-label">Wildfire risk on ${selectedDate}</span>
+          <span class="badge" style="${riskBadgeStyle(normalized)}">${(row.risk_probability * 100).toFixed(3)}%</span>
+        </div>
+        ${fireFlag}
+        <hr />
+        <div class="live-panel">
+          <div class="live-row">
+            <span class="live-label">Live risk</span>
+            <select class="live-window">
+              <option value="today">Today</option>
+              <option value="multi">Next ${MULTI_DAY_WINDOW} days</option>
+            </select>
+            <button type="button" class="live-btn" data-cell="${row.cell_id}">Check</button>
+          </div>
+          <div class="live-result"></div>
+        </div>
       </div>
     `;
   }
 
   function renderLiveResult(data) {
     const { live, explain } = data;
-    const pct = (live.ignition_probability * 100).toFixed(3);
-    const calibratedNote = live.calibrated_probability != null
-      ? ` (calibrated ~${(live.calibrated_probability * 100).toFixed(3)}%)`
+    const fraction = live.ignition_probability;
+    // window_days only appears on /predict/live/multi-day responses; that model has no
+    // calibrator yet (docs/06#testing-the-multi-day-ahead-label-2026-08-21), so flag it as
+    // uncalibrated instead of silently omitting the note the same-day path would show.
+    const windowNote = live.window_days
+      ? `<div class="calibrated-note">risk of ignition anywhere in the next ${live.window_days} days, not calibrated yet</div>`
       : "";
     let contribHtml = "";
     if (explain && explain.top_contributions && explain.top_contributions.length) {
       const items = explain.top_contributions
         .map((c) => `<li>${c.feature}: ${c.value.toFixed(2)} (${c.contribution >= 0 ? "+" : ""}${c.contribution.toFixed(4)})</li>`)
         .join("");
-      contribHtml = `<div><strong>Why:</strong><ul>${items}</ul></div>`;
+      contribHtml = `<div class="why"><strong>Why:</strong><ul>${items}</ul></div>`;
     }
     return `
-      <strong>Live risk (${live.date}):</strong> ${pct}%${calibratedNote}<br/>
-      <span class="live-source">${live.weather_source}</span><br/>
-      <span class="live-source">${live.fire_detection_source}</span>
+      <div class="risk-row">
+        <span class="risk-row-label">live risk (${live.date})</span>
+        <span class="badge" style="${riskBadgeStyle(fraction)}">${(fraction * 100).toFixed(3)}%</span>
+      </div>
+      ${windowNote}
+      <div class="live-source">${live.weather_source}</div>
+      <div class="live-source">${live.fire_detection_source}</div>
       ${contribHtml}
     `;
   }
 
-  async function fetchLiveResult(cellId, dateStr) {
-    const cacheKey = `${cellId}|${dateStr}`;
+  // mode: "today" (same-day model, plus a SHAP explanation) or "multi" (the 3-day-ahead
+  // model). No explain call for "multi" -- /predict/explain's SHAP background is built against
+  // the same-day bundle only (api/main.py::lifespan), so it would misattribute a multi-day
+  // prediction to the wrong model's feature importances.
+  async function fetchLiveResult(cellId, dateStr, mode) {
+    const cacheKey = `${cellId}|${dateStr}|${mode}`;
     if (liveCache[cacheKey]) return liveCache[cacheKey];
+
+    if (mode === "multi") {
+      const liveRes = await fetch(
+        `${API_BASE}/predict/live/multi-day?cell_id=${encodeURIComponent(cellId)}&date=${dateStr}`
+      );
+      if (!liveRes.ok) {
+        const body = await liveRes.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${liveRes.status}`);
+      }
+      const data = { live: await liveRes.json(), explain: null };
+      liveCache[cacheKey] = data;
+      return data;
+    }
 
     const [liveRes, explainRes] = await Promise.all([
       fetch(`${API_BASE}/predict/live?cell_id=${encodeURIComponent(cellId)}&date=${dateStr}`),
@@ -628,17 +766,24 @@
   }
 
   map.on("popupopen", (e) => {
+    // The hover tooltip has no idea a click just opened a popup on the same marker -- the mouse
+    // is still sitting over it, so it stays open and peeks out from behind the popup. Leaflet
+    // popups track their owning layer as `_source` (unexported but stable, the standard way
+    // plugins reach it); closing that layer's tooltip here covers every way a popup can open,
+    // not just this one click handler.
+    e.popup._source?.closeTooltip?.();
     const popupNode = e.popup.getElement();
     const btn = popupNode.querySelector(".live-btn");
     if (!btn || btn.dataset.wired) return;
     btn.dataset.wired = "1";
     btn.addEventListener("click", async () => {
       const cellId = btn.dataset.cell;
+      const mode = popupNode.querySelector(".live-window")?.value || "today";
       const resultEl = popupNode.querySelector(".live-result");
       btn.disabled = true;
       resultEl.textContent = "Fetching live weather + fire detections…";
       try {
-        const data = await fetchLiveResult(cellId, todayUTCDateStr());
+        const data = await fetchLiveResult(cellId, todayUTCDateStr(), mode);
         resultEl.innerHTML = renderLiveResult(data);
       } catch (err) {
         resultEl.textContent = `Live risk unavailable: ${err.message}`;
@@ -678,20 +823,25 @@
     for (const row of rows) {
       if (row.latitude == null || row.longitude == null) continue;
       const normalized = row.risk_probability / maxRisk;
-      const marker = L.circleMarker([row.latitude, row.longitude], {
-        radius: 6,
-        color: row.actual_ignited ? "#1d4ed8" : "transparent",
-        weight: row.actual_ignited ? 2 : 0,
+      // A real-sized square (bounds = the actual 5km cell footprint), not a fixed-pixel dot --
+      // dots stay a constant screen size no matter the zoom level, so they shrink to specks
+      // relative to the grid as soon as you zoom in past the initial view; a square scales with
+      // the map and tiles edge-to-edge like the real grid it represents.
+      // Every cell gets a thin black outline so adjacent squares read as a grid, not a solid
+      // color field with no edges; an actual-fire cell overrides that with a thicker blue
+      // border instead (a rectangle only has one stroke, so this is a swap, not an addition).
+      const marker = L.rectangle(cellBounds(row.latitude, row.longitude), {
+        color: row.actual_ignited ? "#1d4ed8" : "#000",
+        weight: row.actual_ignited ? 2 : 1,
+        opacity: row.actual_ignited ? 1 : 0.35,
         fillColor: riskColor(normalized),
-        fillOpacity: 0.85,
-      }).bindTooltip(
-        `cell ${row.cell_id}<br>risk: ${(row.risk_probability * 100).toFixed(3)}%` +
-        (row.calibrated_risk_probability != null
-          ? `<br>calibrated: ~${(row.calibrated_risk_probability * 100).toFixed(3)}%`
-          : "") +
-        (row.actual_ignited ? "<br><strong>fire detected here</strong>" : "") +
-        "<br><em>click for live risk</em>"
-      ).bindPopup(cellPopupHtml(row));
+        // Low enough that roads/labels/rivers/terrain underneath stay legible through the color,
+        // which matters here specifically since the map itself (not just the risk overlay) is
+        // part of how a reader locates a risky cell relative to a real place -- 0.85 read as an
+        // almost-solid color field with nothing visible underneath it.
+        fillOpacity: 0.55,
+      }).bindTooltip(cellTooltipHtml(row, normalized), { className: "cell-tooltip" })
+        .bindPopup(cellPopupHtml(row, normalized));
       marker.addTo(map);
       markers.push(marker);
       markersByCellId[row.cell_id] = marker;

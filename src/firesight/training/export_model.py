@@ -37,6 +37,13 @@ from firesight.training.persist import ModelBundle, save_model_bundle
 
 MODEL_PATH = Path("data/processed/model.joblib")
 
+# Multi-day-ahead: a second, separately-exported bundle, not a replacement for MODEL_PATH -- served
+# alongside the same-day model, not instead of it (see docs/03-grid-and-labels.md's
+# "ignited_next_Nd" section and docs/06's "Testing the multi-day-ahead label" for how this label and
+# these params were chosen).
+MULTI_DAY_LABEL_COLUMN = "ignited_next_3d"
+MULTI_DAY_MODEL_PATH = Path("data/processed/model_3day.joblib")
+
 # Winner of advanced_models.py's widened RandomizedSearchCV+PredefinedSplit search by val
 # (2023) PR-AUC — see
 # docs/06-modeling-and-evaluation.md#widening-the-search-randomizedsearchcv--predefinedsplit
@@ -70,6 +77,18 @@ MODEL_PATH = Path("data/processed/model.joblib")
 # large enough on the existing params alone that waiting on a wider search wasn't necessary to
 # justify promoting). **Breaks /predict/live** — see docs/07-serving.md's live-weather section;
 # accepted deliberately, matching the cape/convective_precip_mm "dormant limitation" pattern.
+#
+# Re-exported again 2026-08-21 after promoting fuel_type_* (19 one-hot columns, features/fuel_type.py)
+# into FEATURE_COLUMNS. FWI, terrain, and fuel type were first added and benchmarked together (mixed-
+# to-negative, not promoted), then re-tested individually by a per-group ablation — FWI and terrain
+# were each neutral alone; fuel type alone was a real win (test PR-AUC 0.3727 -> 0.3816, top-10%
+# capture 86.0% -> 88.0%) and is the only one of the three promoted. A max_features sweep against the
+# 32-column set confirmed the existing 0.6063 (tuned for 13 columns) is already near-optimal, so
+# params are unchanged here too — see docs/06-modeling-and-evaluation.md#closing-the-feature-category-
+# gap-fwi-terrain-and-fuel-type-2026-08-21 for the full ablation table. Unlike neighbor_fire_count
+# above, this one doesn't break /predict/live: features/live_fuel_type.py fills fuel_type_* from the
+# same static per-cell cache training uses (no live fetch needed, since fuel type doesn't change day
+# to day) — see docs/07-serving.md.
 BEST_RANDOM_FOREST_PARAMS = {
     "n_estimators": 238,
     "max_depth": 6,
@@ -126,7 +145,60 @@ def export_current_best(dataset_path: Path = DATASET_PATH, out_path: Path = MODE
     return bundle
 
 
+def export_multi_day_model(
+    dataset_path: Path = DATASET_PATH,
+    out_path: Path = MULTI_DAY_MODEL_PATH,
+    label_column: str = MULTI_DAY_LABEL_COLUMN,
+) -> ModelBundle:
+    """Fit the same RandomForest params against the multi-day-ahead label, save as a second bundle.
+
+    Reuses `BEST_RANDOM_FOREST_PARAMS` and `FEATURE_COLUMNS` unchanged — the retune attempt
+    documented in docs/06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21
+    won on val but lost on test (the same single-fold-overfitting shape the RF-vs-XGBoost episode
+    already showed once), so the original same-day-tuned params were kept rather than adopted.
+
+    **No calibrator, unlike `export_current_best`** — `evaluation/backtest.py::
+    run_rolling_origin_backtest` (what the pooled calibration in `export_current_best` depends on)
+    is hardcoded to `training/baseline.py::LABEL_COLUMN` (`ignited`), not parameterized by label.
+    Rather than rewire an 8-fold backtest for a first served version of this label, `calibrator`
+    stays `None` here — `ModelBundle.predict_calibrated_proba` already treats that as "unavailable,"
+    not a false zero, so this is a real, accepted, documented gap, not a silent omission. A real gap
+    to close if this label sees continued use.
+    """
+    df = pd.read_parquet(dataset_path)
+    df = filter_fire_season(df)
+    df = df.dropna(subset=[label_column])
+    df[label_column] = df[label_column].astype(int)
+    train, val, test = temporal_split(df, TRAIN_END, VAL_END)
+
+    model = fit_random_forest(train, label_column=label_column, **BEST_RANDOM_FOREST_PARAMS)
+    val_scores = score_model(model, val, label_column=label_column)
+    test_scores = score_model(model, test, label_column=label_column)
+
+    bundle = ModelBundle(
+        model=model,
+        feature_columns=FEATURE_COLUMNS,
+        calibrator=None,
+        metadata={
+            "model_type": "RandomForest",
+            "label_column": label_column,
+            "params": BEST_RANDOM_FOREST_PARAMS,
+            "trained_through": TRAIN_END,
+            "validated_on": f"{TRAIN_END} to {VAL_END}",
+            "val_scores": val_scores,
+            "test_scores": test_scores,
+            "calibration_method": None,
+        },
+    )
+    save_model_bundle(bundle, out_path)
+    return bundle
+
+
 if __name__ == "__main__":
     bundle = export_current_best()
     print(f"Saved model bundle -> {MODEL_PATH}", flush=True)
     print(f"metadata: {bundle.metadata}", flush=True)
+
+    multi_day_bundle = export_multi_day_model()
+    print(f"\nSaved multi-day model bundle -> {MULTI_DAY_MODEL_PATH}", flush=True)
+    print(f"metadata: {multi_day_bundle.metadata}", flush=True)

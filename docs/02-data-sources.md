@@ -1,9 +1,13 @@
 # Data sources
 
-Two independent datasets feed this project, fetched by `pipeline/ingest_firms.py` and
-`pipeline/ingest_era5.py` respectively. They come from different agencies, on different grids, at
-different frequencies — none of that is a coincidence to work around later, it's the normal shape of
-a real geospatial ML problem.
+Four independent datasets feed this project: FIRMS and ERA5-Land (fetched by
+`pipeline/ingest_firms.py` and `pipeline/ingest_era5.py`, the original two, and still the only ones
+pulled by a dedicated `pipeline/ingest_*.py` script since both need a multi-year historical backfill)
+plus BC's Provincial Fuel Type Layer and Open-Meteo's Elevation API (fetched directly by
+`features/fuel_type.py` and `features/topography.py` — no separate ingest step, since both are
+static per-cell lookups fetched once and cached, not a time-varying backfill). They come from
+different agencies, on different grids, at different frequencies — none of that is a coincidence to
+work around later, it's the normal shape of a real geospatial ML problem.
 
 ## FIRMS — fire *detections* (the label source)
 
@@ -75,10 +79,48 @@ month can take seconds to several minutes depending on load, unlike FIRMS' near-
 resumable (already-fetched months are skipped) and keeps a single failure from losing prior
 progress.
 
-## Why these two, and why this bbox
+## BC Provincial Fuel Type Layer — fuel type (a feature source)
 
-Both scripts target the same **Kamloops Fire Centre bounding box** (`-121.5,49.8,-119.0,51.5`,
+`WHSE_LAND_AND_NATURAL_RESOURCE.PROT_FUEL_TYPE_SP`, from the BC Data Catalogue, is BC Wildfire
+Service's own per-forest-stand FBP fuel-type classification (C-1..C-7 conifer, D-1/2 deciduous,
+M-1..M-4 mixedwood, S-1..S-3 slash, O-1a/b grass, N non-fuel, W water) — the categorical input the
+Canadian FBP System is itself built around, and a signal genuinely independent of weather: two
+adjacent cells with identical temperature/humidity/wind can still carry very different real ignition
+risk if one is grassland and the other is wet deciduous forest.
+
+Served as a WFS polygon layer, not a small pre-clipped file (the province-wide download is a ~4GB
+File Geodatabase, needing `fiona`/GDAL to read — a dependency this project deliberately doesn't have,
+see [Grid & labels](03-grid-and-labels.md) for the same tradeoff already made for the fire grid
+itself). `features/fuel_type.py` instead queries the WFS endpoint per grid-cell centroid with a small
+bounding box, since a raw point-`INTERSECTS` filter against this layer's BC Albers geometry doesn't
+work via CQL on this service — checked directly, not assumed. **Access:** free, no API key. Fetched
+once per cell and cached under `data/raw/fuel_type/` — fuel type doesn't change day to day, so
+there's no historical-vs-live split the way weather has.
+
+## Open-Meteo Elevation API — terrain (a feature source)
+
+Copernicus DEM 2021, 90m resolution, served by [Open-Meteo's Elevation
+API](https://open-meteo.com/en/docs/elevation-api) — the same provider `features/live_weather.py`
+already depends on for `/predict/live` (see [Serving](07-serving.md)), reused here rather than adding
+a new vendor. `features/topography.py` fetches one elevation value per grid-cell centroid (not a
+raster download, avoiding the GDAL/rasterio dependency noted above) and derives slope/aspect from
+each cell's 8 neighbor elevations. **Access:** free, no API key, but rate-limited per-coordinate
+(~600 coordinates/minute on the free tier, confirmed by hitting a 429) — `features/topography.py`
+paces its batched requests accordingly. Fetched once and cached under `data/raw/topography/`, for the
+same reason fuel type is: terrain doesn't change day to day.
+
+## Why these sources, and why this bbox
+
+All four sources target the same **Kamloops Fire Centre bounding box** (`-121.5,49.8,-119.0,51.5`,
 west/south/east/north) — a deliberately small region rather than all of BC. Per the README's stated
 status, this is intentional scoping: prove the full pipeline (ingest → grid → label → join → model →
 serve) works end-to-end on a small, fast-to-iterate region before paying the cost (compute, storage,
 download time) of scaling to the whole province.
+
+FIRMS and ERA5-Land were the original two — the label source and the weather feature source a
+minimum-viable version of this problem needs. Fuel type and terrain were added later to close a
+feature-category gap (see [Modeling &
+evaluation](06-modeling-and-evaluation.md#closing-the-feature-category-gap-fwi-terrain-and-fuel-type-2026-08-21)
+for the motivating competitive-landscape review and the results); they're static per-cell lookups
+rather than a second time-varying feed, which is why they don't get their own `pipeline/ingest_*.py`
+script the way FIRMS/ERA5-Land do.

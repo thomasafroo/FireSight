@@ -72,6 +72,13 @@ rows.
 - **`t2m_mean_7d`, `t2m_trend_7d`, `rh_mean_7d`** (also `add_rolling_features`) — 7-day rolling mean
 temperature and relative humidity, plus a trend signal (`t2m` minus `t2m` from 7 days prior) as a
 cheap way to capture "is it warming up" without a heavier decomposition method.
+- **`neighbor_fire_count_1d`, `_3d`, `_7d`** (`add_neighbor_fire_features`) — count of a cell's 8
+Moore (grid-adjacent) neighbors that ignited in the trailing 1/3/7 days, strictly prior-day only (the
+whole date x cell ignition panel is shifted forward one day before any rolling sum, so "today's"
+window only ever sums neighbor status through yesterday — otherwise one real wildfire spanning
+several cells, detected the same FIRMS day across all of them, would leak the very thing being
+predicted). See [Modeling & evaluation](06-modeling-and-evaluation.md#1-spatial-lag-features-
+neighbor-cells-recent-fire-history) for why this was added and the test-set improvement it produced.
 
 ## Handling the `NaN`s this introduces
 
@@ -79,13 +86,24 @@ Rolling and lag features are genuinely undefined for a cell's early history — 
 has no valid value for a cell's first 29 rows, and (as noted above) `days_since_rain` can stay `NaN`
 for even longer if a cell's real history happens to start with an unusually long dry spell. That
 second case is exactly why `drop_incomplete_history(df)` **isn't** a fixed "drop the first 30 rows
-per cell" rule — it's a `dropna(subset=ENGINEERED_COLUMNS)`, which removes exactly the rows
-genuinely missing an engineered value, whatever the reason, rather than assuming one fixed window
-covers every case. Applied in `pipeline/build_dataset.py` right after `engineer_features`, before
-the dataset is written to `data/processed/kamloops_dataset.parquet`.
+per cell" rule — it's a `dropna(subset=columns)`, which removes exactly the rows genuinely missing an
+engineered value, whatever the reason, rather than assuming one fixed window covers every case.
 
-In practice this drops 29 rows per cell (1,443 × 29 = 41,847 rows) from the current dataset — every
-cell in the Kamloops bbox saw rain within its first 29 days on record, so `precip_30d`'s window (the
-longest one) ends up being the binding constraint, not `days_since_rain`. That won't necessarily
-hold for a drier region if this pipeline is ever extended past Kamloops — worth re-checking rather
-than assuming.
+`pipeline/build_dataset.py` doesn't call this right after `engineer_features` any more: FWI
+(`features/fwi.py`), terrain (`features/topography.py`), and fuel type (`features/fuel_type.py`) are
+merged in afterward, and the final `drop_incomplete_history` call — right before the dataset is
+written to `data/processed/kamloops_dataset.parquet` — passes `columns=ENGINEERED_COLUMNS +
+<fuel-type dummy columns>`, so it enforces completeness on those too, not just this page's plain
+weather-engineered features. FWI in particular introduces its own, larger NaN warm-up: every day
+before the dataset's first `March 1` FFMC/DMC/DC reset has no valid recursive state to start from
+(see `fwi.py`'s module docstring), a longer warm-up than any rolling window here.
+
+In practice, `engineer_features`'s own rolling/lag features alone would drop 30 rows per cell
+(1,443 × 30 = 43,290 rows) — every cell in the Kamloops bbox saw rain well within its first 30 days
+on record, so `precip_30d`'s window (the longest one here) is the binding constraint, not
+`days_since_rain`. Adding FWI/terrain/fuel-type's completeness requirement roughly doubles that, to
+61 rows per cell (1,443 × 61 = 88,023 rows) in the current dataset — the marginal rows are almost
+entirely the pre-first-reset FWI warm-up, not a terrain/fuel-type fetch gap (both are static per-cell
+joins with no rolling window of their own). Neither number would necessarily hold for a drier region
+or a dataset starting later in the year if this pipeline is ever extended past Kamloops — worth
+re-checking rather than assuming.

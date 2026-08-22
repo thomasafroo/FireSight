@@ -1,6 +1,6 @@
 """FastAPI inference service wrapping the trained wildfire ignition model.
 
-Four endpoints:
+Five endpoints:
 
 - POST /predict — score one (cell, day)'s worth of already-computed
   features. Does *not* fetch live weather or run feature engineering
@@ -10,6 +10,12 @@ Four endpoints:
   detections from FIRMS NRT, running both through the same feature-
   engineering the training pipeline uses — see features/live_weather.py,
   features/live_fire.py, and docs/07-serving.md.
+- GET /predict/live/multi-day — same live fetch as /predict/live, but scored through a second
+  model trained on a wider "any ignition in the next MULTI_DAY_WINDOW days" label instead of
+  same-day only. Optional: 503s if this deployment hasn't exported
+  `training/export_model.py::export_multi_day_model`'s bundle. See
+  docs/03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21 and
+  docs/06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21.
 - GET /predict/explain — same live fetch as /predict/live, plus a
   per-prediction SHAP breakdown of which features drove that one score —
   see evaluation/shap_analysis.py and docs/06-modeling-and-evaluation.md
@@ -37,7 +43,12 @@ from pydantic import BaseModel, create_model
 from firesight.evaluation.shap_analysis import explain, top_contributions
 from firesight.features.grid import build_grid_cells
 from firesight.features.live_fire import build_live_neighbor_fire_features
+from firesight.features.live_fuel_type import (
+    build_live_fuel_type_features,
+    load_fuel_type_lookup,
+)
 from firesight.features.live_weather import build_live_feature_row
+from firesight.pipeline.build_dataset import MULTI_DAY_WINDOW
 from firesight.pipeline.ingest_firms import BC_KAMLOOPS_BBOX
 from firesight.training.baseline import (
     DATE_COLUMN,
@@ -47,7 +58,7 @@ from firesight.training.baseline import (
     TRAIN_END,
     filter_fire_season,
 )
-from firesight.training.export_model import MODEL_PATH
+from firesight.training.export_model import MODEL_PATH, MULTI_DAY_MODEL_PATH
 from firesight.training.persist import ModelBundle, load_model_bundle
 
 # A modest, fixed-seed sample of *training* rows (dates before TRAIN_END, matching
@@ -59,6 +70,10 @@ SHAP_BACKGROUND_SIZE = 300
 
 DATASET_PATH = Path(os.environ.get("FIRESIGHT_DATASET_PATH", "data/processed/kamloops_dataset.parquet"))
 MODEL_BUNDLE_PATH = Path(os.environ.get("FIRESIGHT_MODEL_PATH", str(MODEL_PATH)))
+# Optional, unlike MODEL_BUNDLE_PATH: a self-host that hasn't run
+# `training/export_model.py::export_multi_day_model` yet just doesn't get /predict/live/multi-day,
+# rather than failing to start entirely.
+MULTI_DAY_MODEL_BUNDLE_PATH = Path(os.environ.get("FIRESIGHT_MULTI_DAY_MODEL_PATH", str(MULTI_DAY_MODEL_PATH)))
 
 state: dict[str, Any] = {}
 
@@ -73,10 +88,31 @@ async def lifespan(app: FastAPI):
     bundle = load_model_bundle(MODEL_BUNDLE_PATH)
     state["bundle"] = bundle
     state["feature_request_model"] = _build_feature_request_model(bundle)
+    # Optional second bundle for /predict/live/multi-day (see docs/03-grid-and-labels.md's
+    # "ignited_next_Nd" section) — validated but not yet a required deployment artifact the way
+    # MODEL_BUNDLE_PATH is, so its absence degrades one endpoint rather than blocking startup.
+    state["multi_day_bundle"] = load_model_bundle(MULTI_DAY_MODEL_BUNDLE_PATH) if MULTI_DAY_MODEL_BUNDLE_PATH.exists() else None
     # Always available (pure computation from the bbox, no file needed) —
     # /predict/live needs a cell's lat/lon regardless of whether the
     # historical dataset parquet has been built on this deployment.
     state["grid_cells"] = build_grid_cells(BC_KAMLOOPS_BBOX)
+    state["fuel_type_columns"] = [c for c in bundle.feature_columns if c.startswith("fuel_type_")]
+    if state["fuel_type_columns"]:
+        # A cache lookup, not a live fetch (features/live_fuel_type.py's module docstring) — but
+        # still a required file dependency once fuel_type_* columns are part of the served model,
+        # same as MODEL_BUNDLE_PATH above, since /predict/live can't fill those columns without it.
+        fuel_type_cache_path = Path(
+            os.environ.get("FIRESIGHT_FUEL_TYPE_CACHE_PATH", "data/raw/fuel_type/kamloops_fuel_type.parquet")
+        )
+        if not fuel_type_cache_path.exists():
+            raise RuntimeError(
+                f"Served model needs fuel_type_* features but no cache exists at "
+                f"{fuel_type_cache_path} — run `python -m firesight.pipeline.build_dataset` (or "
+                "features.fuel_type.build_fuel_type_features directly) first."
+            )
+        state["fuel_type_lookup"] = load_fuel_type_lookup(fuel_type_cache_path)
+    else:
+        state["fuel_type_lookup"] = None
 
     if DATASET_PATH.exists():
         keep = [DATE_COLUMN, "cell_id", LABEL_COLUMN, *bundle.feature_columns]
@@ -159,12 +195,15 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, Any]:
     bundle: ModelBundle = state["bundle"]
+    multi_day_bundle: ModelBundle | None = state["multi_day_bundle"]
     return {
         "status": "ok",
         "model_type": bundle.metadata.get("model_type"),
         "feature_columns": bundle.feature_columns,
         "val_scores": bundle.metadata.get("val_scores"),
         "calibrated": bundle.calibrator is not None,
+        "multi_day_model_loaded": multi_day_bundle is not None,
+        "multi_day_val_scores": multi_day_bundle.metadata.get("val_scores") if multi_day_bundle else None,
     }
 
 
@@ -209,6 +248,10 @@ def _resolve_live_features(cell_id: str, date: str | None) -> tuple[dt.date, flo
     try:
         features = build_live_feature_row(latitude, longitude, target_date, cell_id)
         features.update(build_live_neighbor_fire_features(cell_id, target_date, BC_KAMLOOPS_BBOX))
+        if state["fuel_type_columns"]:
+            features.update(
+                build_live_fuel_type_features(cell_id, state["fuel_type_columns"], state["fuel_type_lookup"])
+            )
     except requests.exceptions.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Live data fetch failed: {exc}") from exc
     except ValueError as exc:
@@ -245,11 +288,55 @@ def predict_live(
     }
 
 
+@app.get("/predict/live/multi-day")
+def predict_live_multi_day(
+    cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
+    date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
+) -> dict[str, Any]:
+    """Score a grid cell's risk of ignition anywhere in the next `MULTI_DAY_WINDOW` days, not just today.
+
+    Reuses the exact same live weather/neighbor-fire/fuel-type sourcing `/predict/live` does (same
+    `_resolve_live_features` call, same `FEATURE_COLUMNS`) — only the model bundle differs, since
+    the multi-day-ahead model is trained on the same features against a different label
+    (`features/labels.py::add_forward_ignition_label`). No `calibrated_probability` here:
+    `training/export_model.py::export_multi_day_model` doesn't attach a calibrator yet — see its
+    docstring and docs/06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21 for
+    why, and for the real, honestly-measured accuracy gap versus same-day prediction this endpoint
+    carries (a harder target from the same information, not a bug).
+    """
+    multi_day_bundle: ModelBundle | None = state["multi_day_bundle"]
+    if multi_day_bundle is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No multi-day model on this deployment — run "
+                "`python -c \"from firesight.training.export_model import export_multi_day_model; "
+                'export_multi_day_model()"` first.'
+            ),
+        )
+
+    target_date, latitude, longitude, features = _resolve_live_features(cell_id, date)
+
+    return {
+        "cell_id": cell_id,
+        "date": target_date.isoformat(),
+        "window_days": MULTI_DAY_WINDOW,
+        "latitude": latitude,
+        "longitude": longitude,
+        "ignition_probability": multi_day_bundle.predict_proba(features),
+        "weather_source": "open-meteo archive API (ERA5-based reanalysis + near-real-time blend)",
+        "fire_detection_source": "NASA FIRMS NRT (VIIRS_NOAA20_NRT)",
+    }
+
+
 @app.get("/predict/explain")
 def predict_explain(
     cell_id: str = Query(..., description="Grid cell id, e.g. from a /risk-map response"),
     date: str | None = Query(None, description="YYYY-MM-DD, UTC. Defaults to today; cannot be in the future."),
-    top_n: int = Query(6, ge=1, le=13, description="How many top per-feature contributions to return."),
+    # le is a static upper bound (FastAPI/pydantic Query constraints are fixed at decorator-eval
+    # time, before the model bundle loads) — kept generous rather than tied exactly to
+    # len(FEATURE_COLUMNS), so it doesn't need updating every time a feature gets added/promoted.
+    top_n: int = Query(6, ge=1, le=40, description="How many top per-feature contributions to return."),
 ) -> dict[str, Any]:
     """/predict/live's score, plus a per-prediction SHAP breakdown of what drove it.
 

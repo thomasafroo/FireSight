@@ -83,12 +83,16 @@ def _scale_pos_weight(train: pd.DataFrame) -> float:
     return negative / max(positive, 1)
 
 
-def fit_random_forest(train: pd.DataFrame, **params: Any) -> RandomForestClassifier:
+def fit_random_forest(train: pd.DataFrame, label_column: str = LABEL_COLUMN, **params: Any) -> RandomForestClassifier:
     """RandomForest with class_weight="balanced" — same imbalance fix as LogisticRegression.
 
     No StandardScaler needed: trees split on per-feature thresholds, so
     feature scale doesn't affect which splits get chosen (see
     docs/06-modeling-and-evaluation.md#where-columntransformer-fits).
+
+    `label_column` defaults to the same-day `ignited` label; pass e.g. `"ignited_next_3d"` to fit
+    against the multi-day-ahead label instead — same override pattern `baseline.py::score_model`
+    has, so a caller scoring the fitted model can pass the matching `label_column` there too.
     """
     model = RandomForestClassifier(
         class_weight="balanced",
@@ -97,7 +101,7 @@ def fit_random_forest(train: pd.DataFrame, **params: Any) -> RandomForestClassif
         verbose=1,
         **params,
     )
-    model.fit(train[FEATURE_COLUMNS], train[LABEL_COLUMN])
+    model.fit(train[FEATURE_COLUMNS], train[label_column])
     return model
 
 

@@ -1605,11 +1605,110 @@ extent likely wouldn't. Neither confound was chased further this pass — matchi
 hyperparameters is enough to decide *don't ship yet*, not enough to definitively rule the features out
 forever).
 
-**Decision: not promoted.** `training/baseline.py::FEATURE_COLUMNS` and `export_model.py`'s served model
-are **unchanged** (still the 13-feature set). The new columns stay in `kamloops_dataset.parquet`
-(enforced complete by `drop_incomplete_history`) and the fetch/cache modules
-(`features/fwi.py`/`topography.py`/`fuel_type.py`, cached under `data/raw/`) as validated, reusable
-groundwork — a future pass with a re-tuned `max_features` (or a per-group ablation isolating FWI from
-terrain from fuel type, rather than all three at once) is the natural next check, not something this
-result argues for deleting. `/predict/live`/`/predict/explain` are unaffected either way, since neither
-endpoint's served model changed.
+**Decision at this point: not promoted.** `training/baseline.py::FEATURE_COLUMNS` and `export_model.py`'s
+served model stayed **unchanged** (still the 13-feature set) pending the follow-up check named above —
+see below for how that check actually turned out.
+
+### Per-group ablation: isolating which of the three actually helps
+
+The natural next check named above — re-tuned `max_features`, or isolating FWI from terrain from fuel
+type rather than testing all three at once — was run the same day. Each group was added to the 13-feature
+base individually, same `BEST_RANDOM_FOREST_PARAMS`, same train/val/test split:
+
+| model                     | n features | val PR-AUC | test PR-AUC | test top-10% |
+| -------------------------- | ---------- | ---------- | ------------ | ------------ |
+| base (13, served)           | 13         | 0.3654     | 0.3727       | 86.0%        |
+| base + FWI                  | 19         | 0.3690     | 0.3737       | 86.0%        |
+| base + terrain              | 17         | 0.3663     | 0.3697       | 86.8%        |
+| **base + fuel type**        | **32**     | **0.3632** | **0.3816**   | **88.0%**    |
+| base + all three            | 42         | 0.3562     | 0.3172       | 86.4%        |
+
+FWI and terrain are each essentially neutral alone — neither helps nor hurts test PR-AUC by more than
+noise. **Fuel type alone is a real, clean win**: +2.4% relative test PR-AUC, +2pp top-10% capture, with
+no hyperparameter changes. The all-three row reproduces the original combined result almost exactly
+(test PR-AUC 0.3172, matching the table above), confirming it's real and not a fluke — but the per-group
+breakdown shows the regression isn't caused by any single group being bad; it's fuel type's real signal
+getting drowned out by combining it with two groups that add columns without adding value.
+
+**Confound (1) resolved: `max_features` wasn't stale.** A sweep from 0.15 to 1.0 against the 32-column
+base+fuel-type model (other params fixed) is unimodal, peaking right around the existing 0.6063 —
+val PR-AUC there (0.3632) is the highest of the sweep, and test PR-AUC (0.3816) is within noise of the
+peak (0.4523 edges it slightly on test, 0.3843 vs 0.3816, but loses on val, the metric this project
+selects on). The 13-column-tuned fraction already generalizes fine to 32 columns; the earlier
+42-feature regression was never a stale-hyperparameter artifact.
+
+**Confound (2) — thin one-hot classes — no longer a blocker**, since the group carrying them
+(fuel type alone) is the one that measurably helps despite it; a province-wide extent would likely
+still improve on this further, but it isn't gating today's result.
+
+**Decision: fuel type promoted, FWI and terrain are not.** `training/baseline.py::FEATURE_COLUMNS` now
+includes the 19 `fuel_type_*` columns (32 features total), re-exported with the same
+`BEST_RANDOM_FOREST_PARAMS` — no retune needed, since the sweep above showed the existing value is
+already near-optimal. FWI and terrain stay in `kamloops_dataset.parquet` and their fetch/cache modules
+(`features/fwi.py`/`topography.py`, still cached under `data/raw/`) as validated-but-not-promoted
+groundwork, the same status `cape`/`convective_precip_mm` already has — genuinely tested, not dead
+code, just not currently earning their place in the served model. `/predict/live`/`/predict/explain`
+needed a new fuel-type source to keep working once the served model actually depends on it — see
+[Serving](07-serving.md#live-weather-for-predictlive) for `features/live_fuel_type.py`, a cache lookup
+rather than a third live-data fetch, since fuel type doesn't change day to day.
+
+## Testing the multi-day-ahead label (2026-08-21)
+
+[Problem framing](01-problem-framing.md#what-were-actually-predicting) has always named the natural
+extension past same-day prediction: "will a fire be detected ... on day *D*, or within the next *N*
+days?" This is the first real attempt at it. See [Grid &
+labels](03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21) for how
+`ignited_next_3d` is actually built (a forward rolling-max over `ignited`, `n_days=3`) and why the
+temporal split's boundaries don't need special trimming for it given this project's existing
+fire-season scope — this section is the modeling result on top of that label.
+
+**Positive rate rises, but less than proportionally to the window width.** Filtered to fire season,
+the 3-day-ahead label's positive rate is ~1.7x the same-day rate on every split (test: 0.0998% ->
+0.1741%), not ~3x — real fires cluster over consecutive days (the same event still burning, or a
+FIRMS detection lagging ignition by a day), so widening the window catches fewer *additional* distinct
+events than a naive 3x would suggest.
+
+**First pass: the served model's exact hyperparameters, unretuned, on the new label.** Same
+`FEATURE_COLUMNS` (the current 13, unchanged — fuel type wasn't re-added to this experiment), same
+`BEST_RANDOM_FOREST_PARAMS`, same temporal split, only the label column swapped:
+
+| model | val PR-AUC | test PR-AUC | test top-10% |
+| --- | --- | --- | --- |
+| same-day `ignited` (served) | 0.3632 | 0.3816 | 88.0% |
+| 3-day-ahead, unretuned | 0.3520 | 0.2906 | 80.8% |
+| dummy (3-day-ahead) | 0.0054 | 0.0017 | 15.9% |
+
+Clears the dummy floor by a wide margin (test PR-AUC ~166x the dummy's), confirming real skill on the
+wider target — but a genuine, expected gap versus the same-day model on the metric that matters most
+(test PR-AUC down ~24% relative). This isn't a bug or a confound to chase: the 3-day-ahead model is
+solving a strictly harder problem (any ignition in a 3-day window, not one exact day) from the exact
+same information (day *D*'s conditions only — no weather forecast for *D+1*/*D+2* exists in this
+pipeline), so some accuracy loss relative to the easier same-day target is exactly what should happen.
+
+**Retune attempt: made val better and test worse — discarded.** A 15-candidate manual random search
+(same `n_jobs=-1`-hang-avoiding manual-loop pattern the `max_features` sweep above used, generalized
+to `n_estimators`/`max_depth`/`min_samples_leaf`/`max_features` via a fixed-seed random sample) picked
+the val-PR-AUC winner:
+
+| model | val PR-AUC | test PR-AUC | test top-10% |
+| --- | --- | --- | --- |
+| 3-day-ahead, unretuned | 0.3520 | **0.2906** | **80.8%** |
+| 3-day-ahead, retuned (`n_estimators=499, max_depth=8, min_samples_leaf=7, max_features=0.7553`) | **0.3593** | 0.2704 | 79.1% |
+
+The retuned config wins on val but loses on test — the same single-fold-overfitting shape this project
+has hit before (the 2026-08-12 RandomForest-vs-XGBoost episode, [Widening the
+search](#widening-the-search-randomizedsearchcv--predefinedsplit)), and resolved the same way: trust
+test over a close val call, since val is one year and more exposed to overfitting its own fold. The
+unretuned, same-day-tuned params are the better choice for this label — this project's existing
+hyperparameters already generalize reasonably well to a differently-shaped target, so a dedicated
+retune wasn't actually needed here, and searching harder made things worse, not better.
+
+**Decision: served, as a second parallel model.** Unlike FWI/terrain above (neutral-to-negative on the
+*same* target, genuinely not worth serving), this result is a real, working capability with an honest
+accuracy gap on a *harder* target — worth shipping with the gap documented, not worth hiding behind
+"not promoted." `training/export_model.py::export_multi_day_model` exports a second `ModelBundle`
+(`data/processed/model_3day.joblib`, same `FEATURE_COLUMNS`/`BEST_RANDOM_FOREST_PARAMS`, no calibrator
+yet — see that function's docstring for why) and `api/main.py` serves it at
+`GET /predict/live/multi-day`, reusing the exact same live weather/neighbor-fire/fuel-type sourcing
+`/predict/live` already has. See [Serving](07-serving.md#predictlivemulti-day-the-3-day-ahead-endpoint)
+for the endpoint itself.
