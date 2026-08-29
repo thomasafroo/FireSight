@@ -17,8 +17,20 @@ result. Validated, not yet served.
 
 That's a **binary classification** problem, not regression: the label (`ignited`) is 0 or 1, not a
 continuous quantity. We're not predicting *how big* a fire will be or *how much* area burns, just
-whether ignition is detected at all. Fire size/spread modeling is a different (harder) problem,
-deliberately out of scope for this project.
+whether a fire is detected in that cell at all. Modeling fire *behaviour*, how fast a given fire
+grows, in which direction, and how much area it consumes, is a different and harder problem
+(physics-based systems like the [FBP
+System](glossary.md#fbp-system-canadian-forest-fire-behaviour-prediction-system) and BC's Prometheus
+simulator exist for it) and is deliberately out of scope here.
+
+**That scope line is about outputs, not inputs, and the distinction matters.** The target counts a
+detection in a cell however the fire got there, whether it started in that cell or spread into it
+from next door, so a cell catching fire from an active neighbor is a genuine positive, not a
+technicality. That makes recent nearby fire activity fair game as a *feature*, and
+`neighbor_fire_count_{1,3,7}d` ([Feature
+engineering](05-feature-engineering.md#what-actually-got-built)) is the single strongest input the
+served model has. Using an actively-spreading nearby fire as evidence that a cell is at risk is not
+the same thing as simulating how that fire will spread: this project does the first, not the second.
 
 Why split the region into a grid instead of predicting for "Kamloops" as a whole? Because risk isn't
 uniform across a region, a river valley and a dry ridge 20km apart can have very different risk on
