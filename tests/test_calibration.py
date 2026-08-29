@@ -96,7 +96,7 @@ def test_fit_venn_abers_calibrator_recovers_a_known_overconfident_scaling():
 
 def test_apply_venn_abers_calibrator_widens_the_interval_with_a_smaller_calibration_set():
     """The multiprobability interval [p0, p1] is Venn-Abers' own signal for thin calibration-set
-    support behind a prediction — docs/06's Venn-Abers proposal (#3) hinges on this actually being
+    support behind a prediction, docs/06's Venn-Abers proposal (#3) hinges on this actually being
     true, checked here directly rather than assumed from the paper."""
     rng = np.random.default_rng(3)
     y_score_large_cal = rng.uniform(0, 1, size=4000)

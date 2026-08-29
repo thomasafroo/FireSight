@@ -1,13 +1,14 @@
 """Local, per-prediction explanations, complementing the global MDI/permutation-importance work.
 
-`training/advanced_models.py`'s feature importance (see docs/06-modeling-and-evaluation.md#feature-
-importance-what-the-model-is-actually-leaning-on) is entirely *global* — one ranking across the whole
-val/test set. It can say "neighbor_fire_count matters most on average," not "why did this specific
-cell get flagged high-risk on this specific day." SHAP gives *local*, additive, per-prediction
-attributions (each feature's contribution sums exactly to that one prediction's score) instead.
+`training/advanced_models.py`'s feature importance (see
+docs/06-modeling-and-evaluation.md#feature-importance-what-the-model-is-actually-leaning-on)
+is entirely *global*, one ranking across the whole val/test set. It can say
+"neighbor_fire_count matters most on average," not "why did this specific cell get flagged
+high-risk on this specific day." SHAP gives *local*, additive, per-prediction attributions (each
+feature's contribution sums exactly to that one prediction's score) instead.
 
-Two gotchas, both handled explicitly rather than assumed, per the research note in docs/06-modeling-
-and-evaluation.md#2-shap-explainability:
+Two gotchas, both handled explicitly rather than assumed, per the research note in
+docs/06-modeling-and-evaluation.md#2-shap-explainability:
 
 1. **Output shape is version-dependent.** Verified empirically against the installed `shap==0.52.0`
    (not assumed from docs/README): `TreeExplainer.shap_values` / calling the explainer both return a
@@ -18,7 +19,7 @@ and-evaluation.md#2-shap-explainability:
 2. **Raw margin vs. calibrated probability.** `TreeExplainer(..., feature_perturbation="interventional",
    model_output="probability")` gives SHAP values that sum exactly to `model.predict_proba`'s raw
    output (`ignition_probability`, the same rank-only score everything else in this project's
-   evaluation is built on) — verified below by reconstruction, not assumed. There is no SHAP
+   evaluation is built on), verified below by reconstruction, not assumed. There is no SHAP
    decomposition of `calibrated_probability`: the attached isotonic calibrator
    (evaluation/calibration.py) is a separate post-hoc regression bolted on *after* the tree ensemble,
    not part of its structure, so nothing here can attribute a calibrated number to individual
@@ -40,7 +41,7 @@ def _positive_class_explanation(
     """Run TreeExplainer and slice down to the positive (ignited=1) class only.
 
     `background` should be a modest sample of *training* rows (a few hundred is plenty for
-    `feature_perturbation="interventional"`) — it defines the reference distribution SHAP values are
+    `feature_perturbation="interventional"`), it defines the reference distribution SHAP values are
     computed relative to, not the rows being explained.
     """
     explainer = shap.TreeExplainer(
@@ -51,7 +52,7 @@ def _positive_class_explanation(
     if explanation.values.ndim != 3 or explanation.values.shape[-1] != 2:
         raise ValueError(
             f"Expected TreeExplainer output shaped (n_samples, n_features, 2) for this binary "
-            f"classifier — got {explanation.values.shape}. shap's output shape is version-dependent "
+            f"classifier, got {explanation.values.shape}. shap's output shape is version-dependent "
             f"(see this module's docstring); re-verify against the installed shap version before "
             f"trusting the positive-class slice below."
         )
@@ -72,7 +73,7 @@ def explain(model, X: pd.DataFrame, background: pd.DataFrame) -> shap.Explanatio
     actual = model.predict_proba(X)[:, 1]
     if not np.allclose(reconstructed, actual, atol=1e-4):
         raise ValueError(
-            "SHAP values + base value did not reconstruct predict_proba's raw output — the "
+            "SHAP values + base value did not reconstruct predict_proba's raw output, the "
             "additivity guarantee model_output='probability' is supposed to give has broken, "
             "don't trust these attributions."
         )
@@ -82,9 +83,9 @@ def explain(model, X: pd.DataFrame, background: pd.DataFrame) -> shap.Explanatio
 def mean_abs_shap_importance(explanation: shap.Explanation) -> pd.DataFrame:
     """Global ranking: mean |SHAP value| per feature, the SHAP analogue of permutation importance.
 
-    Pure aggregation over an already-computed `Explanation` — the natural cross-check against
+    Pure aggregation over an already-computed `Explanation`, the natural cross-check against
     `training/advanced_models.py`'s MDI/permutation rankings (a third, independent method agreeing
-    with the first two is stronger evidence the model's signal is real, not an artifact — see
+    with the first two is stronger evidence the model's signal is real, not an artifact, see
     docs/06-modeling-and-evaluation.md#feature-importance-what-the-model-is-actually-leaning-on).
     """
     mean_abs = np.abs(explanation.values).mean(axis=0)
@@ -100,7 +101,7 @@ def top_contributions(
     row_index: int,
     top_n: int = 5,
 ) -> list[dict]:
-    """Sorted, human-readable breakdown of one row's prediction — a waterfall plot as data.
+    """Sorted, human-readable breakdown of one row's prediction, a waterfall plot as data.
 
     Returns the `top_n` features with the largest |contribution| for this one row, each as
     `{"feature", "value", "contribution"}`, sorted by |contribution| descending. `contribution` is in
@@ -137,7 +138,7 @@ if __name__ == "__main__":
     from firesight.training.export_model import MODEL_PATH
     from firesight.training.persist import load_model_bundle
 
-    OUT_DIR = DATASET_PATH.parent  # data/processed/ — gitignored build output, matching model.joblib
+    OUT_DIR = DATASET_PATH.parent  # data/processed/, gitignored build output, matching model.joblib
 
     bundle = load_model_bundle(MODEL_PATH)
     df = pd.read_parquet(DATASET_PATH)

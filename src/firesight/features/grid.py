@@ -1,8 +1,7 @@
 """Build a regular lat/lon grid and assign points to cells.
 
-Deliberately avoids geopandas/GDAL for now — plain lat/lon math is enough
-to get a working pipeline on a small region, and the geo stack can come
-later once the MVP proves out.
+Deliberately avoids geopandas/GDAL, plain lat/lon math is enough for this
+project's small, fixed region, and the geo stack isn't needed.
 """
 
 from __future__ import annotations
@@ -49,12 +48,13 @@ def assign_cell_ids(
 
 
 def neighbor_cell_ids(cell_id: str) -> list[str]:
-    """The up to 8 Moore neighbors of a cell, from its "{row}_{col}" id.
+    """The 8 Moore neighbors of a cell, from its "{row}_{col}" id.
 
     Same offset scheme as `features/engineering.py::_moore_neighbor_adjacency` (duplicated rather
     than imported, to avoid a features/engineering.py <-> features/live_fire.py cross-dependency for
-    one small helper). Doesn't check whether a neighbor id actually exists in the grid; callers that
-    care (e.g. filtering fetched detections down to real neighbors) do that themselves.
+    one small helper). Always returns exactly 8 ids: it doesn't check membership in the grid, so an
+    edge cell gets ids for off-grid neighbors too. Callers that care (e.g. filtering fetched
+    detections down to real neighbors) do that themselves.
     """
     row, col = (int(v) for v in cell_id.split("_", 1))
     offsets = [(dr, dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if (dr, dc) != (0, 0)]
@@ -70,8 +70,8 @@ def build_grid_cells(
 
     Uses the same row/col scheme as `assign_cell_ids` (floor division on the
     same reference latitude), so cell_ids line up between the two. This is
-    the full cell universe for a region — including cells that never saw a
-    fire detection — needed to build a (cell, date) label scaffold rather
+    the full cell universe for a region, including cells that never saw a
+    fire detection, needed to build a (cell, date) label scaffold rather
     than just the cells that happen to appear in the fire data.
     """
     west, south, east, north = parse_bbox(bbox)

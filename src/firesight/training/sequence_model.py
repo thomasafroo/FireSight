@@ -9,7 +9,7 @@ the current RandomForest, refit on the *same* rows under the *same* temporal-spl
 model adopted on principle.
 
 This is a diagnostic/comparison script, matching the role `advanced_models.py` already plays for
-RF/XGBoost tuning — it does not touch `export_model.py` or serving. Promoting a result (either
+RF/XGBoost tuning, it does not touch `export_model.py` or serving. Promoting a result (either
 direction) into the served model is a separate, later decision.
 """
 
@@ -25,10 +25,17 @@ from firesight.training.baseline import DATE_COLUMN, LABEL_COLUMN
 
 RANDOM_STATE = 0
 
-# The 5 raw daily quantities already in `baseline.py::FEATURE_COLUMNS`, excluding the columns
+# The 5 raw daily *weather* quantities in `baseline.py::FEATURE_COLUMNS`, excluding the columns
 # already dropped there as dead weight (d2m, u10, v10, wind_dir_sin/cos) and excluding the
 # *rolling* columns (precip_7d/30d, t2m_mean_7d, rh_mean_7d, days_since_rain) this experiment
 # exists to test a raw-sequence replacement for.
+#
+# FEATURE_COLUMNS has since grown to 32, and the rest is deliberately not represented here:
+# neighbor_fire_count_{1,3,7}d and the 19 fuel_type_* one-hots aren't daily weather series a CNN
+# could read a temporal shape out of. So the RandomForest comparison in __main__ is not a
+# like-for-like *input* set (RF sees all 32 columns, the CNN sees these 5 raw series) -- it's
+# matched on rows, not features, because the question is whether the raw sequence carries temporal
+# signal the rolling summaries flatten away, not which model is better overall.
 CHANNELS = ["t2m", "precip_mm", "swvl1", "relative_humidity", "wind_speed"]
 
 # Matches the longest existing rolling window (precip_30d) and the question as posed in
@@ -47,13 +54,13 @@ def build_raw_sequences(
     the raw `channels` sequence ending at (and including) that row.
 
     A row without a full, gap-free `seq_len`-day same-cell history is silently excluded rather than
-    raised on or interpolated — the same "don't guess, just drop it" precedent
+    raised on or interpolated, the same "don't guess, just drop it" precedent
     `features/engineering.py::drop_incomplete_history` already established for insufficient rolling
     history. Built per cell (not as one global sliding window) so a window can never mix two cells'
     days together.
 
     Returns `(sequences, valid_rows)`: a `(N, seq_len, len(channels))` float32 array and the
-    `N`-row slice of `df` each sequence ends on, in the same order — `valid_rows` keeps its
+    `N`-row slice of `df` each sequence ends on, in the same order, `valid_rows` keeps its
     original positional index into `df` (not reset), so callers can align further row-level
     filtering/splitting (see this module's `__main__`) back to `sequences` by `.index`.
     """
@@ -90,7 +97,7 @@ def build_raw_sequences(
 class SequenceCNN(nn.Module):
     """Small 1D-CNN over the time axis: two conv layers, global average pool, a small dense head.
 
-    Not an LSTM/attention model — cheapest to train and matches the project's "start simple" bias;
+    Not an LSTM/attention model, cheapest to train and matches the project's "start simple" bias;
     the temporal patterns worth testing here (a heat ramp, a compound dry-then-hot stretch) are
     local-window patterns a CNN's receptive field covers well, not long-range dependencies that
     would justify recurrence/attention's added complexity and slower training.
@@ -119,14 +126,16 @@ class SequenceCNN(nn.Module):
 class AttentionPoolSequenceCNN(nn.Module):
     """`SequenceCNN` with its pooling layer swapped for a learned, per-day softmax-weighted sum.
 
-    Narrower than a full self-attention/Transformer block (see docs/06-modeling-and-evaluation.md
-    #4-attention-pooling-on-the-sequence-model for why that was rejected: this project has twice
-    shown more model capacity backfires here). `conv1`/`conv2` are byte-for-byte unchanged from
-    `SequenceCNN` — only `AdaptiveAvgPool1d(1)` is replaced with one `nn.Linear(hidden_channels*2,
-    1)` scoring each day + a softmax over the time axis, ~66 extra parameters. That isolates a
-    genuinely different, still-open question from the one `SequenceCNN` already answered: does
-    *learning which days to weight* beat uniform averaging, independent of the raw-sequence-vs-
-    rolling-features comparison.
+    Narrower than a full self-attention/Transformer block (see
+    docs/06-modeling-and-evaluation.md#4-attention-pooling-on-the-sequence-model-a-narrower-angle-than-a-full-transformer
+    for why that was rejected: this project has twice shown more model capacity backfires here).
+
+    `conv1`/`conv2` are byte-for-byte unchanged from `SequenceCNN`, only `AdaptiveAvgPool1d(1)` is
+    replaced with one `nn.Linear(hidden_channels*2, 1)` scoring each day + a softmax over the time
+    axis, 33 extra parameters (3,553 -> 3,586 at the default `hidden_channels=16`, since pooling
+    itself has none). That isolates a genuinely different, still-open question from the one
+    `SequenceCNN` already answered: does *learning which days to weight* beat uniform averaging,
+    independent of the raw-sequence-vs-rolling-features comparison.
     """
 
     def __init__(self, n_channels: int, hidden_channels: int = 16):
@@ -174,14 +183,14 @@ def fit_sequence_cnn(
     best-val state dict.
 
     `model_cls` is parameterized (not hardcoded to `SequenceCNN`) so `AttentionPoolSequenceCNN`
-    below can reuse this exact training loop — the docs/06 proposal #4 point of that experiment is
+    below can reuse this exact training loop, the docs/06 proposal #4 point of that experiment is
     to isolate "does the pooling layer matter," so everything else (loss, optimizer, epochs, model
     selection) must be held identical, not reimplemented in parallel.
 
     `pos_weight` in `BCEWithLogitsLoss` is PyTorch's version of `class_weight="balanced"` elsewhere
     in this project: it's the train fold's own negative/positive ratio, so the loss doesn't just
     learn to always predict "no fire." Model *selection* (which epoch's weights to keep) uses val,
-    never test — the same discipline `tune_model`/`tune_random_search` already enforce for the
+    never test, the same discipline `tune_model`/`tune_random_search` already enforce for the
     tree-based models.
     """
     torch.manual_seed(random_state)
@@ -294,7 +303,7 @@ if __name__ == "__main__":
     # Refit RandomForest on the exact same row subset (not the docs/06 numbers, which are computed
     # on a slightly different row set) so the comparison is apples-to-apples on identical rows.
     # Uses the same tuned BEST_RANDOM_FOREST_PARAMS the served model uses, not sklearn's untuned
-    # defaults (unbounded depth) — research/neural-networks.md already documented that unbounded
+    # defaults (unbounded depth), research/neural-networks.md already documented that unbounded
     # depth on this dataset overfits and craters top-10% capture, which would make this comparison
     # meaningless.
     print("\n--- RandomForest (same rows, tuned params) ---", flush=True)

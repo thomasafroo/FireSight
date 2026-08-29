@@ -3,7 +3,7 @@
 Only reached once `baseline.py` has proven the pipeline beats a Dummy
 floor (see docs/01-problem-framing.md#methodology-baseline-first-complexity-only-if-earned).
 Both models here get compared against `LogisticRegression`'s val-set
-scores, not just against each other — complexity is kept only if it
+scores, not just against each other, complexity is kept only if it
 earns a measurable PR-AUC/top-k gain.
 """
 
@@ -33,7 +33,7 @@ from firesight.training.baseline import (
 RANDOM_STATE = 0
 
 # Small, deliberately modest grids: this is a first tuning pass on a
-# ~2.6M-row training set, not an exhaustive search — see tune_model's
+# ~2.6M-row training set, not an exhaustive search, see tune_model's
 # docstring for why a manual grid is used here instead of GridSearchCV.
 # max_depth intentionally excludes None (unbounded depth): a single fit
 # at depth 16/200 trees already took ~2 minutes on the real training set,
@@ -51,7 +51,7 @@ XGBOOST_GRID: dict[str, list[Any]] = {
     "learning_rate": [0.05, 0.1],
 }
 
-# Wider search space for tune_random_search — sized for sampling (n_iter draws),
+# Wider search space for tune_random_search, sized for sampling (n_iter draws),
 # not exhaustive enumeration, so it can cover a much bigger space than the
 # grids above without the combinatorial blowup a full grid over this many
 # dimensions would need. max_depth still capped at 16 for the same reason as
@@ -78,20 +78,20 @@ N_ITER = 15
 
 
 def _scale_pos_weight(train: pd.DataFrame) -> float:
-    """negative/positive count in *this* training fold — see fit_xgboost."""
+    """negative/positive count in *this* training fold, see fit_xgboost."""
     negative, positive = train[LABEL_COLUMN].value_counts().reindex([0, 1], fill_value=0)
     return negative / max(positive, 1)
 
 
 def fit_random_forest(train: pd.DataFrame, label_column: str = LABEL_COLUMN, **params: Any) -> RandomForestClassifier:
-    """RandomForest with class_weight="balanced" — same imbalance fix as LogisticRegression.
+    """RandomForest with class_weight="balanced", same imbalance fix as LogisticRegression.
 
     No StandardScaler needed: trees split on per-feature thresholds, so
     feature scale doesn't affect which splits get chosen (see
     docs/06-modeling-and-evaluation.md#where-columntransformer-fits).
 
     `label_column` defaults to the same-day `ignited` label; pass e.g. `"ignited_next_3d"` to fit
-    against the multi-day-ahead label instead — same override pattern `baseline.py::score_model`
+    against the multi-day-ahead label instead, same override pattern `baseline.py::score_model`
     has, so a caller scoring the fitted model can pass the matching `label_column` there too.
     """
     model = RandomForestClassifier(
@@ -110,7 +110,7 @@ def fit_xgboost(train: pd.DataFrame, **params: Any) -> XGBClassifier:
 
     XGBoost has no class_weight param; the equivalent imbalance
     correction is scale_pos_weight = (#negative / #positive) in the
-    *training* fold specifically — recomputed here rather than hardcoded,
+    *training* fold specifically, recomputed here rather than hardcoded,
     since it must reflect the fold actually being fit on, not the full
     dataset's ratio (which would leak val/test's class balance in).
     """
@@ -136,7 +136,7 @@ def tune_model(
     """Manual grid search against a fixed temporal val split, not sklearn's GridSearchCV.
 
     GridSearchCV's built-in cross-validation assumes independent folds it
-    can shuffle/re-split — running it here would silently reintroduce the
+    can shuffle/re-split, running it here would silently reintroduce the
     random-split leakage temporal_split exists to prevent (see
     docs/06-modeling-and-evaluation.md#splitting-by-time-never-randomly).
     Every candidate is instead fit on the *same* train fold (<=2022) and
@@ -181,9 +181,9 @@ def tune_random_search(
     RandomizedSearchCV's default `cv` has the same problem `tune_model`'s
     docstring describes for GridSearchCV: it assumes independent, shufflable
     folds. PredefinedSplit sidesteps that by handing sklearn the *exact*
-    train/val roles temporal_split already established — every train row is
+    train/val roles temporal_split already established, every train row is
     marked -1 (never held out), every val row is marked 0 (the only fold
-    scored) — so RandomizedSearchCV's random *sampling of candidates* stays
+    scored), so RandomizedSearchCV's random *sampling of candidates* stays
     separate from any random *sampling of folds*. This is what lets it search
     a much wider space than tune_model's exhaustive grids: n_iter draws from
     continuous distributions instead of enumerating every combination.
@@ -196,7 +196,7 @@ def tune_random_search(
 
     n_jobs defaults to -1 (one candidate per CPU core, same as before this
     param existed). Pass n_jobs=1 for a GPU estimator (e.g. XGBoost with
-    device="cuda") — GPU training uses the whole device for a single fit, so
+    device="cuda"), GPU training uses the whole device for a single fit, so
     running multiple candidates in parallel subprocesses would have them
     contend for the same GPU instead of speeding anything up, and can throw
     CUDA out-of-memory errors depending on model/data size. See
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     _run_and_report("RandomForest", fit_random_forest, RANDOM_FOREST_GRID, train, val, test)
     _run_and_report("XGBoost", fit_xgboost, XGBOOST_GRID, train, val, test)
 
-    # XGBoost's randomized search runs separately on GPU (tune_xgboost_gpu.py) — not repeated
+    # XGBoost's randomized search runs separately on GPU (tune_xgboost_gpu.py), not repeated
     # here on CPU, since it's the same search space (XGBOOST_DISTRIBUTIONS) and would be pure
     # redundant work. RandomForest has no GPU path in scikit-learn, so its randomized search
     # still runs here.

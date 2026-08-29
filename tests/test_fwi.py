@@ -2,7 +2,7 @@
 
 Every expected value below is copied verbatim from `cffdrs/cffdrs_r`'s own
 `tests/testthat/data/*.csv` fixtures (the official NRCan-maintained reference implementation this
-module's docstring cites) — not hand-derived — so a passing suite means the formula *translation*
+module's docstring cites), not hand-derived, so a passing suite means the formula *translation*
 is correct against the canonical source, not just internally self-consistent.
 """
 

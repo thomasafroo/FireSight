@@ -68,7 +68,7 @@ def client(tmp_path, monkeypatch):
 def calibrated_client(tmp_path, monkeypatch):
     # Same as `client`, but the bundle carries a real IsotonicRegression calibrator, so the
     # `calibrated_probability`/`calibrated_risk_probability` response fields have a case where
-    # they're actually populated, not just `None` — the `client` fixture above already covers the
+    # they're actually populated, not just `None`, the `client` fixture above already covers the
     # no-calibrator/`None` branch.
     raw_scores = np.linspace(0.0, 1.0, 50)
     true_rate = raw_scores / 10
@@ -118,7 +118,7 @@ def test_predict_rejects_missing_feature(client):
 
 
 def _patch_live_fetches(monkeypatch, main_module, neighbor_counts: dict | None = None) -> None:
-    """Both /predict/live data sources are real network calls (Open-Meteo, FIRMS NRT) — every test
+    """Both /predict/live data sources are real network calls (Open-Meteo, FIRMS NRT), every test
     that reaches the try block below the cell/date validation must stub both, or it'll try to hit
     the live internet during `pytest`."""
     monkeypatch.setattr(
@@ -302,7 +302,7 @@ def test_predict_live_surfaces_a_weather_fetch_failure_as_a_502(client, monkeypa
 
 
 def test_predict_live_surfaces_a_fire_detection_fetch_failure_as_a_502(client, monkeypatch):
-    """The FIRMS NRT fetch is the second live data source in the same try block as weather — needs
+    """The FIRMS NRT fetch is the second live data source in the same try block as weather, needs
     its own failure-path test, not just weather's, since a bug could catch one and miss the other."""
     import api.main as main_module
 
@@ -321,7 +321,7 @@ def test_predict_live_surfaces_a_fire_detection_fetch_failure_as_a_502(client, m
 
 
 def _build_explain_client(tmp_path, monkeypatch):
-    """/predict/explain needs a tree-based model (`shap.TreeExplainer`) — the `client` fixture's
+    """/predict/explain needs a tree-based model (`shap.TreeExplainer`), the `client` fixture's
     LogisticRegression bundle above isn't usable for it, so this is a dedicated fixture rather
     than reusing `_build_client`."""
     train = pd.DataFrame(

@@ -41,7 +41,7 @@ def test_join_weather_attaches_nearest_point_weather_for_matching_date():
 def test_load_era5_daily_averages_instant_vars_and_realigns_precip(tmp_path):
     # 3 days x 4 steps (00/06/12/18h). ERA5-Land's tp accumulates from 00 UTC
     # and resets daily, so the 00:00 sample of day N+1 holds day N's full
-    # total (see docs/04-weather-join.md) — the 06/12/18h values are
+    # total (see docs/04-weather-join.md), the 06/12/18h values are
     # cumulative-since-midnight subsets, not independent chunks summed here.
     times = pd.date_range("2021-06-01", periods=12, freq="6h")
     tp_metres = np.array(

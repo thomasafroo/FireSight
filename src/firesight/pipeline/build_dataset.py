@@ -1,9 +1,18 @@
-"""Build the full Kamloops (cell, date) dataset: labels + joined weather.
+"""Build the full Kamloops (cell, date) dataset: labels, weather, and every joined feature source.
 
-Ties together features/grid.py, features/labels.py, and features/weather.py
-into the end-to-end table the training pipeline will consume:
-filter FIRMS to real fires -> assign cells -> build label scaffold -> join
-ERA5 weather -> write to data/processed/.
+Ties the `features/` modules together into the end-to-end table the training pipeline consumes:
+
+    filter FIRMS to real fires (labels.py) -> assign cells (grid.py) -> build the (cell, date)
+    label scaffold and the multi-day-ahead label (labels.py) -> join ERA5-Land weather
+    (weather.py) -> join full-ERA5 CAPE/convective precip (convective.py) -> engineer the
+    rolling/lag features (engineering.py) -> compute the FWI System codes (fwi.py) -> merge the
+    static per-cell terrain (topography.py) and FBP fuel type (fuel_type.py) -> drop rows with
+    incomplete history -> write to data/processed/.
+
+Order is load-bearing in two places, both flagged inline below: the multi-day label and the
+neighbor-fire features need the scaffold's dense (every cell x every date) panel before any join or
+drop can put a gap in it, and compute_fwi needs relative_humidity (from engineer_features) plus
+grid_cells for per-cell latitude.
 """
 
 from __future__ import annotations

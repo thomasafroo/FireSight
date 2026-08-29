@@ -2,23 +2,23 @@
 
 Terrain drives fire behavior independently of weather: slope steepens spread rate (fire moves
 faster uphill), and aspect controls solar exposure (south-facing slopes in the northern hemisphere
-dry out faster — a real, well-documented driver in physics-based fire-behavior systems like the
+dry out faster, a real, well-documented driver in physics-based fire-behavior systems like the
 Canadian FBP System, which this project doesn't implement). FireSight had zero terrain features
 before this module.
 
-Elevation comes from Open-Meteo's Elevation API (Copernicus DEM 2021, 90m resolution) — the same
+Elevation comes from Open-Meteo's Elevation API (Copernicus DEM 2021, 90m resolution), the same
 provider `features/live_weather.py` already depends on, avoiding a new vendor, and since these are
-per-cell centroid point queries rather than a raster download, avoiding the GDAL/rasterio dependency
-`features/grid.py`'s own docstring says this project deliberately doesn't have yet. One elevation
+per-cell centroid point queries rather than a raster download, avoiding the geopandas/GDAL stack
+`features/grid.py`'s own docstring says this project deliberately does without. One elevation
 value per grid cell, fetched once and cached under `data/raw/` (gitignored, matching this project's
-existing raw-data convention) — terrain doesn't change day to day, so there's no live/offline split
+existing raw-data convention), terrain doesn't change day to day, so there's no live/offline split
 the way weather has.
 
-Slope and aspect are derived, not fetched: Horn's method (Horn 1981 — the same formula ESRI's Slope
+Slope and aspect are derived, not fetched: Horn's method (Horn 1981, the same formula ESRI's Slope
 and Aspect tools implement), computed from each cell's 8 Moore-neighbor elevations rather than a
-fine-grained DEM raster — appropriate at this project's 5km cell resolution, where the elevation
+fine-grained DEM raster, appropriate at this project's 5km cell resolution, where the elevation
 signal is already a coarse per-cell average, not a place sub-cell DEM detail would help. A missing
-neighbor (grid edge) falls back to the center cell's own elevation — the standard "edge replication"
+neighbor (grid edge) falls back to the center cell's own elevation, the standard "edge replication"
 convention DEM slope tools use, so a boundary cell gets a (less certain, gradient-underestimating)
 slope/aspect rather than being dropped from the dataset entirely.
 """
@@ -54,7 +54,7 @@ def fetch_elevations(
     """Elevation (meters) for every cell's centroid, via Open-Meteo's Elevation API.
 
     Batches into <=100-coordinate requests, pausing between them and retrying with exponential
-    backoff on failure (including a 429) — the same retry shape
+    backoff on failure (including a 429), the same retry shape
     `pipeline/ingest_firms.py::fetch_window` already uses for FIRMS. Returns a `cell_id`/
     `elevation_m` frame in the same row order as `grid_cells`.
     """
@@ -95,7 +95,7 @@ def fetch_or_load_elevations(
     """Elevations from the local cache if present, else fetched fresh and cached.
 
     Terrain doesn't change day to day, so re-fetching on every pipeline run would just put repeated
-    load on a free public API for an answer that's already known — cache once, reuse thereafter.
+    load on a free public API for an answer that's already known, cache once, reuse thereafter.
     """
     if cache_path.exists():
         return pd.read_parquet(cache_path)
@@ -110,7 +110,7 @@ def compute_slope_aspect(elevations: pd.DataFrame, cell_size_km: float = 5.0) ->
     """Horn's-method slope (degrees) and aspect (as sin/cos of a compass bearing) per cell.
 
     Aspect is encoded as sin/cos rather than a raw bearing for the same reason
-    `engineering.py::add_wind_features` encodes wind direction that way — compass direction is
+    `engineering.py::add_wind_features` encodes wind direction that way, compass direction is
     circular, and a raw 0-360 numeric column would misrepresent that to any model treating feature
     distance linearly.
 
@@ -158,6 +158,6 @@ def build_topography_features(
     cache_path: Path = DEFAULT_CACHE_PATH,
     session: requests.Session | None = None,
 ) -> pd.DataFrame:
-    """Elevation + slope + aspect for every cell — the join target for pipeline/build_dataset.py."""
+    """Elevation + slope + aspect for every cell, the join target for pipeline/build_dataset.py."""
     elevations = fetch_or_load_elevations(grid_cells, cache_path=cache_path, session=session)
     return compute_slope_aspect(elevations, cell_size_km=cell_size_km)

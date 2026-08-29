@@ -1,43 +1,43 @@
-"""BC Provincial Fuel Type Layer — per-cell FBP fuel type classification.
+"""BC Provincial Fuel Type Layer, per-cell FBP fuel type classification.
 
 The single largest input-category gap this project had before this module: a 2020-2025 systematic
 review of wildfire ML studies found fuel/vegetation state was the most common input category
-overall (44.7% of reported inputs, ahead of weather/climate) — FireSight had zero vegetation
+overall (44.7% of reported inputs, ahead of weather/climate), FireSight had zero vegetation
 features before this. Fuel type is the categorical input the Canadian FBP System itself is built
 around (C-1..C-7 conifer, D-1/2 deciduous, M-1..M-4 mixedwood, S-1..S-3 slash, O-1a/b grass, N
-non-fuel, W water — see the FBP System background at cwfis.cfs.nrcan.gc.ca) and is a genuinely
+non-fuel, W water, see the FBP System background at cwfis.cfs.nrcan.gc.ca) and is a genuinely
 different signal from weather: two adjacent cells with identical temperature/humidity/wind can
 still have very different real ignition/spread risk if one is grassland and the other is wet
 deciduous forest.
 
 **Source, verified live against the actual service, not assumed from documentation.** BC's
 Provincial Fuel Type Layer (`WHSE_LAND_AND_NATURAL_RESOURCE.PROT_FUEL_TYPE_SP`, from the BC Data
-Catalogue) is served as a WFS polygon layer, not a small pre-clipped file — checked directly, and it
+Catalogue) is served as a WFS polygon layer, not a small pre-clipped file, checked directly, and it
 covers the whole province at individual-forest-stand resolution (>400,000 polygons intersect the
 Kamloops FC bbox alone; the province-wide download is a ~4GB File Geodatabase). Rather than
-downloading that (a real multi-GB file, and File Geodatabases need `fiona`/GDAL to read — a
+downloading that (a real multi-GB file, and File Geodatabases need `fiona`/GDAL to read, a
 dependency this project doesn't have, see `features/grid.py`'s docstring on the same tradeoff),
 this module queries the WFS endpoint directly per grid-cell centroid with a small bounding box
-(`BOX_HALF_DEGREE`, ~28m) — checked directly that a raw CQL point-`INTERSECTS` filter against this
+(`BOX_HALF_DEGREE`, ~28m), checked directly that a raw CQL point-`INTERSECTS` filter against this
 layer's `SHAPE` geometry doesn't match (the layer's native CRS, BC Albers/EPSG:3005, isn't accepted
 via a bare CQL point literal on this service), so a small bbox is the query shape that actually
 works, not a simplification chosen for convenience.
 
 **`FT_PROMETHEUS`, not the raw `FUEL_TYPE_CD` field, is what this module keeps.** `FUEL_TYPE_CD`
-often carries a burn-history prefix (e.g. `B71_S-2` — modified by a specific past burn) that
+often carries a burn-history prefix (e.g. `B71_S-2`, modified by a specific past burn) that
 multiplies the effective class count far past the ~16 base FBP types; `FT_PROMETHEUS` is the same
-layer's own already-cleaned base code (`S-2` for that same polygon) — the field the BC Wildfire
+layer's own already-cleaned base code (`S-2` for that same polygon), the field the BC Wildfire
 Service's own Prometheus fire-growth simulator consumes, verified directly against several real
 query responses rather than assumed from the field's name alone.
 
 **Mode resolution at fragmented boundaries, not an error.** A tiny bbox around a grid cell centroid
 occasionally straddles more than one stand polygon (common near urban/fuel-type edges); this module
-takes the most common code among whatever polygons intersect that box — a reasonable resolution for
+takes the most common code among whatever polygons intersect that box, a reasonable resolution for
 a categorical model feature, not a claim of surveyor-grade single-point precision. A cell with zero
 polygon coverage at all (unmapped gap) gets `UNKNOWN_FUEL_TYPE` rather than a guessed class.
 
-Fetched once and cached under `data/raw/` (gitignored, matching this project's raw-data convention)
-— fuel type doesn't change day to day (except after an actual burn, well outside this project's
+Fetched once and cached under `data/raw/` (gitignored, matching this project's raw-data convention),
+fuel type doesn't change day to day (except after an actual burn, well outside this project's
 current per-day feature-refresh scope), so there's no live/offline split the way weather has.
 """
 
@@ -106,7 +106,7 @@ def fetch_fuel_types(
     session: requests.Session | None = None,
     pause_seconds: float = PAUSE_BETWEEN_REQUESTS_SECONDS,
 ) -> pd.DataFrame:
-    """FBP fuel type for every cell's centroid — one WFS query per cell (see `fetch_fuel_type`)."""
+    """FBP fuel type for every cell's centroid, one WFS query per cell (see `fetch_fuel_type`)."""
     session = session or requests.Session()
     codes = []
     n = len(grid_cells)
@@ -135,7 +135,7 @@ def fetch_or_load_fuel_types(
 def encode_fuel_type_features(fuel_types: pd.DataFrame) -> pd.DataFrame:
     """One `fuel_type_<code>` 0/1 column per code actually present in this region.
 
-    Not a fixed province-wide 16-class schema — a class that never occurs in the Kamloops FC
+    Not a fixed province-wide 16-class schema, a class that never occurs in the Kamloops FC
     extract would just be an always-zero column, dead weight for both training and storage.
     """
     dummies = pd.get_dummies(fuel_types["fuel_type_cd"], prefix="fuel_type").astype(float)
@@ -147,6 +147,6 @@ def build_fuel_type_features(
     cache_path: Path = DEFAULT_CACHE_PATH,
     session: requests.Session | None = None,
 ) -> pd.DataFrame:
-    """One-hot fuel type columns for every cell — the join target for pipeline/build_dataset.py."""
+    """One-hot fuel type columns for every cell, the join target for pipeline/build_dataset.py."""
     fuel_types = fetch_or_load_fuel_types(grid_cells, cache_path=cache_path, session=session)
     return encode_fuel_type_features(fuel_types)

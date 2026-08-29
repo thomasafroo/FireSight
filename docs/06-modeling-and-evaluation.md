@@ -2,23 +2,23 @@
 
 ## Splitting by time, never randomly
 
-`training/baseline.py::temporal_split` splits the dataset by date — `train < train_end`,
-`train_end <= val < val_end`, `test >= val_end` — rather than a random `train_test_split`. This
+`training/baseline.py::temporal_split` splits the dataset by date, `train < train_end`,
+`train_end <= val < val_end`, `test >= val_end`, rather than a random `train_test_split`. This
 isn't a stylistic preference, it's a correctness requirement for this kind of data.
 
 **Why random splitting leaks information here:** rows in this dataset are correlated both
 **spatially** (neighboring cells share weather, and are often part of the same fire event) and
-**temporally** (today's weather is strongly correlated with yesterday's — a drought doesn't appear
+**temporally** (today's weather is strongly correlated with yesterday's, a drought doesn't appear
 or vanish between consecutive days). A random split would scatter correlated rows across both train
-and test — e.g. cell A on June 5th in train, cell A on June 6th (nearly identical weather) in test.
+and test, e.g. cell A on June 5th in train, cell A on June 6th (nearly identical weather) in test.
 The model would then get credit in evaluation for essentially having memorized a near-duplicate of a
 training row, producing metrics that look good but don't reflect how the model would perform on
-genuinely unseen future data. This general failure mode is called **temporal leakage** — see
-[glossary.md](glossary.md#leakage).
+genuinely unseen future data. This general failure mode is called **temporal leakage**, see
+[glossary.md](glossary.md#leakage-temporal--data-leakage).
 
 Splitting by date directly simulates the real deployment scenario: "if this model had existed and
 been trained only on data available up to some point, how would it have performed going forward?"
-The plan (README, project memory) is train ≤2022, validate on 2023, test on 2024 — each boundary is
+The plan (README, project memory) is train ≤2022, validate on 2023, test on 2024, each boundary is
 a date the model genuinely could not see past during training.
 
 ## Scoping to fire season
@@ -26,7 +26,7 @@ a date the model genuinely could not see past during training.
 `training/baseline.py::filter_fire_season` restricts every training/evaluation run to **May 1 – Oct
 15** (any year), matching the Kamloops Fire Centre's typical Category 2/3 open-burning prohibition
 window. It's applied right after loading the dataset and before `temporal_split`, in `baseline.py`,
-`advanced_models.py`, and `export_model.py` alike — so this is a scope decision for the whole
+`advanced_models.py`, and `export_model.py` alike, so this is a scope decision for the whole
 project, not just an evaluation-time filter, and the model the API serves is trained (not just
 scored) on fire-season data only.
 
@@ -34,10 +34,10 @@ scored) on fire-season data only.
 spot](#known-limitation-a-wintershoulder-season-blind-spot) below. Two rounds of feature engineering
 couldn't give the model any way to flag a winter fire, because winter/shoulder-season fires are more
 often human-caused (debris burning, equipment) than weather-driven, and every feature here is
-weather-derived — there's no fixable gap, just a different phenomenon the available data can't see.
+weather-derived, there's no fixable gap, just a different phenomenon the available data can't see.
 Rather than keep chasing that with more features, the project now scopes to the months where (a) the
 weather-driven fire-risk signal this model measures actually applies, and (b) the large, destructive,
-operationally-important fires concentrate — hot+dry conditions both drive ignition and let fires
+operationally-important fires concentrate, hot+dry conditions both drive ignition and let fires
 spread fast once started, which is why BC's largest fire seasons (e.g. the catastrophic summer of
 2021, spot-checked in an earlier step) are a summer phenomenon. Restricting to fire season also
 shrinks the extreme class imbalance a little, since none of the near-zero-risk winter days are in the
@@ -46,7 +46,7 @@ pool being ranked/scored anymore.
 Numbers throughout the rest of this page from before this change reflect the full-year (Jan-Dec)
 dataset; re-running `baseline.py`/`advanced_models.py`/`export_model.py` after this change will
 produce fire-season-only numbers that aren't directly comparable to them (fewer rows, different class
-balance, different date range) — expected to move mostly by removing the "free" near-zero-risk winter
+balance, different date range), expected to move mostly by removing the "free" near-zero-risk winter
 rows from the ranking, not because anything about the model itself changed. See [Re-tuning after the
 fire-season scope change](#re-tuning-after-the-fire-season-scope-change) below for what actually
 happened when the models were re-tuned on the new scope.
@@ -59,15 +59,15 @@ repeating here with the mechanics: `training/baseline.py` currently implements `
 (`DummyClassifier`) and `fit_logistic_regression()` (`LogisticRegression`), in that order, before
 anything more complex.
 
-`DummyClassifier(strategy="stratified")` doesn't look at the features at all — it predicts by
+`DummyClassifier(strategy="stratified")` doesn't look at the features at all, it predicts by
 randomly sampling from the *training* label distribution (so with a 0.16% positive rate, it predicts
 positive about 0.16% of the time, at random). Its purpose isn't to be a good model; it's a
 **floor**. If a real model can't beat this, the pipeline has a bug somewhere upstream (label leakage
-the wrong direction, a broken join, features that don't actually vary with the target) — no amount
+the wrong direction, a broken join, features that don't actually vary with the target), no amount
 of model sophistication fixes a broken input, so this check has to happen before investing in a
 fancier model.
 
-`LogisticRegression(class_weight="balanced")` — the first model that actually uses the features.
+`LogisticRegression(class_weight="balanced")`, the first model that actually uses the features.
 `class_weight="balanced"` matters a lot here: by default, a classifier trained on 0.16%-positive
 data will often just learn to predict "negative" for everything, since that already gets it 99.84%
 training accuracy with near-zero loss contribution from the rare positives.
@@ -95,29 +95,29 @@ model = Pipeline([
 model.fit(train[FEATURE_COLUMNS], train[LABEL_COLUMN])
 ```
 
-A plain `Pipeline`, not a `ColumnTransformer`, in the end — see below for why. A few things worth
+A plain `Pipeline`, not a `ColumnTransformer`, in the end, see below for why. A few things worth
 being explicit about:
 
 - **No** `ColumnTransformer` **needed at all, in the end.** Every feature that made it into
 `FEATURE_COLUMNS` is numeric (temperature, soil moisture, precipitation, wind speed,
-days-since-rain, etc.) — there's no categorical column to route separately, so a single
+days-since-rain, etc.), there's no categorical column to route separately, so a single
 `StandardScaler` applied to everything is enough; `ColumnTransformer` only earns its keep once
-different columns need different treatment. `cell_id` is deliberately *not* fed in as a raw feature
-— treating it as a categorical column (even one-hot encoded) would let the model partly memorize
+different columns need different treatment. `cell_id` is deliberately *not* fed in as a raw feature,
+treating it as a categorical column (even one-hot encoded) would let the model partly memorize
 "this specific cell tends to burn," which can't generalize to a cell it hasn't seen enough fire
 history for, and muddies the temporal-generalization story the whole train/val/test split is
 designed to test honestly.
 - **Scaling only matters for the linear model.** `StandardScaler` is needed for `LogisticRegression`
 (gradient-based optimization converges better and regularization behaves sanely when features are on
-comparable scales) but is a no-op for tree-based models (`RandomForestClassifier`, `XGBoost`) —
+comparable scales) but is a no-op for tree-based models (`RandomForestClassifier`, `XGBoost`),
 trees split on thresholds per feature independently, so the scale of a feature doesn't change what
 splits are chosen. The pipeline can stay a no-scaling passthrough for tree models, or keep the
 scaler in place harmlessly.
 - **Fit only on train.** `StandardScaler` is `.fit()` on the train split only, then `.transform()`
-on val and test — fitting it on the full dataset (including val/test) before splitting would leak
+on val and test, fitting it on the full dataset (including val/test) before splitting would leak
 information about their distribution into a preprocessing decision, a subtler version of the same
 leakage problem the temporal split exists to prevent. (The rolling-feature warm-up `NaN`s are a
-separate, earlier step: rows are dropped outright — not imputed — in `pipeline/build_dataset.py`
+separate, earlier step: rows are dropped outright, not imputed, in `pipeline/build_dataset.py`
 before the split even happens, since a dropped row has no split-dependent behavior to leak; see
 [Feature engineering](05-feature-engineering.md#handling-the-nans-this-introduces).)
 
@@ -125,7 +125,7 @@ before the split even happens, since a dropped row has no split-dependent behavi
 
 Covered in full in [Problem framing](01-problem-framing.md#the-metrics-used-instead): PR-AUC
 (primary), ROC-AUC (secondary context), top-k% capture (operational framing). All three live in
-`evaluation/metrics.py` and take `(y_true, y_score)` — raw predicted probabilities/scores, not
+`evaluation/metrics.py` and take `(y_true, y_score)`, raw predicted probabilities/scores, not
 thresholded 0/1 predictions, since threshold choice is itself a downstream decision (how much
 false-positive tolerance is acceptable given real dispatch costs) that these metrics deliberately
 stay agnostic to.
@@ -133,7 +133,7 @@ stay agnostic to.
 ## Baseline results (2023 validation set)
 
 `python -m firesight.training.baseline` splits the real dataset (train ≤2022: 2.59M rows, 4,282
-positives; val 2023: 527k rows, 1,135 positives; test 2024: 527k rows, 397 positives — note the
+positives; val 2023: 527k rows, 1,135 positives; test 2024: 527k rows, 397 positives, note the
 positive count *drops* year over year here, consistent with 2023/2024 being quieter BC fire seasons
 than the catastrophic 2021 season sitting in train) and scores both baselines on val:
 
@@ -145,52 +145,54 @@ than the catastrophic 2021 season sitting in train) and scores both baselines on
 
 
 The dummy floor lands almost exactly at the base rate (~0.0022, matching 2023's ~0.22% positive
-rate) and chance ROC-AUC (0.5) — as expected, since it ignores the features entirely. Logistic
+rate) and chance ROC-AUC (0.5), as expected, since it ignores the features entirely. Logistic
 regression clears that floor by a wide margin on every metric, most tellingly on the operational
 one: **ranking cell-days by this simple linear model and acting on only the riskiest 10% would have
 caught 40% of 2023's actual fire detections**, vs. ~10% from acting on a random 10% of cell-days.
-That's the first real evidence the whole pipeline — grid, labels, weather join, feature engineering
-— captures a genuine signal rather than noise, which is the entire point of running the
+That's the first real evidence the whole pipeline, grid, labels, weather join, feature engineering,
+captures a genuine signal rather than noise, which is the entire point of running the
 dummy/logistic pair before investing in RandomForest/XGBoost (see
 [Problem framing](01-problem-framing.md#methodology-baseline-first-complexity-only-if-earned)).
-PR-AUC is still low in absolute terms (0.0064) — expected at this base rate; it's the *relative*
+PR-AUC is still low in absolute terms (0.0064), expected at this base rate; it's the *relative*
 jump over the dummy floor that's informative, not the absolute number, which is why the dummy
 comparison always ships alongside any single model's score rather than being read in isolation.
 
 ## RandomForest and XGBoost (`training/advanced_models.py`)
 
 With the baseline pair confirming the pipeline carries real signal, `advanced_models.py::tune_model`
-ran a small manual [grid search](glossary.md#hyperparameter--grid-search) — see its docstring for
+ran a small manual [grid search](glossary.md#hyperparameter--grid-search), see its docstring for
 why a manual loop over the fixed temporal val split is used instead of
 `sklearn.model_selection.GridSearchCV` (its built-in cross-validation would silently reintroduce the
 random-split leakage `temporal_split` exists to prevent). Both models get the same class-imbalance
 correction in spirit as `LogisticRegression`'s `class_weight="balanced"`: `RandomForestClassifier`
 takes the same `class_weight="balanced"` param directly; `XGBClassifier` has no such param, so
-`fit_xgboost` computes the equivalent `[scale_pos_weight](glossary.md#scale_pos_weight)`
+`fit_xgboost` computes the equivalent [`scale_pos_weight`](glossary.md#scale_pos_weight)
 `= negative_count / positive_count` from the *training fold specifically* each time (recomputed, not
 hardcoded, so it can never leak val/test's class balance into the correction).
 
-Best of each grid, by val (2023) PR-AUC — the primary metric — with their 2024 test scores alongside
+Best of each grid, by val (2023) PR-AUC, the primary metric, with their 2024 test scores alongside
 (test was never used for tuning, purely a final honest read):
 
 
 | model                | params                         | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
 | -------------------- | ------------------------------ | ---------- | ----------- | ----------- | ----------- | ------------ | ------------ |
-| `LogisticRegression` | class-weighted                 | 0.0064     | 0.729       | 40.4%       | —           | —            | —            |
+| `LogisticRegression` | class-weighted                 | 0.0064     | 0.729       | 40.4%       | N/A         | N/A          | N/A          |
 | `RandomForest`       | 400 trees, depth 8, min_leaf 5 | 0.0081     | 0.808       | 43.9%       | 0.0054      | 0.813        | 55.4%        |
 | `XGBoost`            | 200 trees, depth 4, lr 0.05    | **0.0083** | 0.805       | **45.1%**   | **0.0057**  | 0.794        | 49.6%        |
 
 
 Both tree models clear `LogisticRegression` by a solid margin on every val metric, confirming the
 extra complexity earns its keep here (see
-[Problem framing](01-problem-framing.md#methodology-baseline-first-complexity-only-if-earned) — this
+[Problem framing](01-problem-framing.md#methodology-baseline-first-complexity-only-if-earned), this
 is exactly the check that methodology exists to force). Between the two, it's a genuinely mixed
 picture, not a clean win: **XGBoost has the better PR-AUC on both val and test** (the metric this
-project treats as primary), but **RandomForest has the better ROC-AUC and top-10% capture on test**
-— worth stating plainly rather than picking whichever number favors a predetermined answer.
-XGBoost's result was chosen as the currently-served model (`export_model.py::export_current_best`)
-on the strength of the primary metric holding up consistently on both the tuning split *and* the
-untouched test split, but this is close enough that revisiting it (e.g. a wider hyperparameter grid,
+project treats as primary), but **RandomForest has the better ROC-AUC and top-10% capture on test**,
+worth stating plainly rather than picking whichever number favors a predetermined answer.
+XGBoost's result was, at this point in the project, promoted to the served model
+(`export_model.py::export_current_best`) on the strength of the primary metric holding up
+consistently on both the tuning split *and* the untouched test split (a wider search later reversed
+this, see [Widening the search](#widening-the-search-randomizedsearchcv--predefinedsplit) below), but
+this is close enough that revisiting it (e.g. a wider hyperparameter grid,
 or an ensemble of both) would be a reasonable next step rather than treating XGBoost as a settled
 answer.
 
@@ -198,15 +200,15 @@ A general pattern in both grids worth remembering when tuning further: **shallow
 more/fewer estimators consistently beat deeper trees** in this search (RandomForest's depth-8
 candidates all outscored its depth-16 candidates; XGBoost's depth-4 candidates all outscored its
 depth-6 candidates). Consistent with a small positive class (a few thousand positives out of
-millions of rows) — deep trees have enough capacity to start fitting noise in the majority class
+millions of rows), deep trees have enough capacity to start fitting noise in the majority class
 rather than generalizable fire-weather structure, so shallower trees regularize by construction.
 
 ## Widening the search: RandomizedSearchCV + PredefinedSplit
 
-The grids above are deliberately small (8 candidates each) — a first tuning pass, not an exhaustive
+The grids above are deliberately small (8 candidates each), a first tuning pass, not an exhaustive
 one. The reason `tune_model` avoids `GridSearchCV` is its *default* cross-validation, which reshuffles
-data into random folds and would reintroduce the same leakage `temporal_split` exists to prevent —
-but that only rules out the default, not the tool. `[PredefinedSplit](glossary.md#predefinedsplit)`
+data into random folds and would reintroduce the same leakage `temporal_split` exists to prevent,
+but that only rules out the default, not the tool. [`PredefinedSplit`](glossary.md#predefinedsplit)
 lets you hand `RandomizedSearchCV`/`GridSearchCV` the *exact* existing train/val split (`test_fold`:
 `-1` for every train row, `0` for every val row) instead of letting it invent folds, so the same
 temporal-safety guarantee holds while gaining `RandomizedSearchCV`'s ability to sample a much wider,
@@ -215,12 +217,12 @@ every combination in a hand-written grid.
 
 `training/advanced_models.py::tune_random_search` implements this: it builds the `PredefinedSplit`,
 runs `RandomizedSearchCV(..., refit=False)`, then refits the winning params on the train fold only
-(refit=False matters here — `RandomizedSearchCV`'s own refit would otherwise retrain the winner on
+(refit=False matters here, `RandomizedSearchCV`'s own refit would otherwise retrain the winner on
 train+val combined, silently changing what the "best" model was actually fit on, which would break
 the "test is never touched during tuning" guarantee every other model in this module keeps). The
 wider distributions (`RANDOM_FOREST_DISTRIBUTIONS`, `XGBOOST_DISTRIBUTIONS`) add dimensions the small
-grids never searched at all — `max_features` for RandomForest, `subsample`/`colsample_bytree`/
-`reg_alpha`/`reg_lambda` for XGBoost — sampled 15 times each:
+grids never searched at all, `max_features` for RandomForest, `subsample`/`colsample_bytree`/
+`reg_alpha`/`reg_lambda` for XGBoost, sampled 15 times each:
 
 
 | model                          | params                                                       | val PR-AUC | val ROC-AUC | val top-10% | test PR-AUC | test ROC-AUC | test top-10% |
@@ -232,22 +234,23 @@ grids never searched at all — `max_features` for RandomForest, `subsample`/`co
 
 
 Both widened models clear their own grid-search counterparts by a wide margin on every val metric,
-and both post a large top-10% capture gain on the untouched test set (55.4%/49.6% -> 59.7%/59.4%) —
+and both post a large top-10% capture gain on the untouched test set (55.4%/49.6% -> 59.7%/59.4%),
 the wider search earns its keep. The winning configs are consistently **even shallower** than the
 small grids' winners (RandomForest depth 5 vs. 8; XGBoost depth 3 with a learning rate roughly a
 third of the grid's best), reinforcing the shallower-trees-generalize-better pattern above rather than
 contradicting it.
 
 This also **changes the earlier RandomForest-vs-XGBoost read**: with both given the same wider search,
-RandomForest is now the stronger candidate on the test set specifically — better PR-AUC, better
-ROC-AUC, and a very slightly better top-10% capture — while XGBoost only edges it on the val metrics
+RandomForest is now the stronger candidate on the test set specifically, better PR-AUC, better
+ROC-AUC, and a very slightly better top-10% capture, while XGBoost only edges it on the val metrics
 (the ones most exposed to overfitting a single validation fold). That's a genuine flip from the grid
-results, where XGBoost had won on PR-AUC. Not a fully exhaustive result — 15 sampled candidates is evidence of a trend, not a guarantee, and a
-larger `n_iter` would sharpen it further (an attempt at `n_iter=40` was abandoned after running ~2
-hours with no output, far past the ~20 minutes linear scaling from the 15-candidate run would predict
-— most likely `n_jobs=-1`'s process-based parallelism thrashing on repeated large-dataframe pickling
+results, where XGBoost had won on PR-AUC. Not a fully exhaustive result, 15 sampled candidates is
+evidence of a trend, not a guarantee, and a larger `n_iter` would sharpen it further (an attempt at
+`n_iter=40` was abandoned after running ~2 hours with no output, far past the ~20 minutes linear
+scaling from the 15-candidate run would predict,
+most likely `n_jobs=-1`'s process-based parallelism thrashing on repeated large-dataframe pickling
 across workers, not a real compute need). On the strength of the 15-candidate result, RandomForest
-(`BEST_RANDOM_FOREST_PARAMS`) is now the model `export_model.py` exports — see
+(`BEST_RANDOM_FOREST_PARAMS`) is now the model `export_model.py` exports, see
 [Serving](07-serving.md#persisting-a-model-without-losing-its-contract) for that swap, verified live
 the same way the earlier LogisticRegression -> XGBoost swap was.
 
@@ -255,7 +258,7 @@ the same way the earlier LogisticRegression -> XGBoost swap was.
 
 Two changes landed together before this re-tune: the [fire-season
 scoping](#scoping-to-fire-season) above, and extending the raw FIRMS/ERA5-Land ingestion window back
-to 2012 (from 2018) for more training rows — `train` now covers 2012-2022 instead of 2018-2022, while
+to 2012 (from 2018) for more training rows, `train` now covers 2012-2022 instead of 2018-2022, while
 `val` (2023) and `test` (2024) boundaries are unchanged. Both `advanced_models.py::tune_model` (the
 small hand-written grids) and `tune_random_search` (the wider `RandomizedSearchCV`+`PredefinedSplit`
 search) were re-run against this new scope:
@@ -271,16 +274,16 @@ search) were re-run against this new scope:
 
 The same pattern as the earlier widening-the-search result repeats: grid-search RandomForest narrowly
 wins on val PR-AUC, but the randomized-search RandomForest wins on **every** test metric (PR-AUC,
-ROC-AUC, top-10% capture) despite a lower val score — and val PR-AUC is exactly the number most prone
+ROC-AUC, top-10% capture) despite a lower val score, and val PR-AUC is exactly the number most prone
 to overfitting a single validation fold, especially when a grid only tried 8 combinations. Consistent
 with that reasoning (and with how the RandomForest-over-XGBoost call was made last time), the
 randomized-search RandomForest (`n_estimators=238, max_depth=6, max_features=0.6063, min_samples_leaf=7`)
 is the new `BEST_RANDOM_FOREST_PARAMS` in `export_model.py`, re-exported to `data/processed/model.joblib`.
 
 **Don't over-read the jump from the pre-scoping numbers** (e.g. test top-10% capture 59.7% ->
-71.9%). Two things changed at once — more training years and a narrower, easier-to-rank evaluation
+71.9%). Two things changed at once, more training years and a narrower, easier-to-rank evaluation
 population (winter's huge pool of near-zero-risk non-fire rows is gone from val/test, not just from
-train) — neither of which means the model generalizes better to conditions it couldn't handle before.
+train), neither of which means the model generalizes better to conditions it couldn't handle before.
 It's a fair comparison of models *within* this run, and a legitimate scope decision, but not evidence
 of a modeling breakthrough against the old numbers above it on this page.
 
@@ -300,19 +303,19 @@ which fires the served model's own top-10%-by-risk cutoff catches vs. misses, ru
 | month | val (2023) caught/total | val capture | test (2024) caught/total | test capture |
 | ----- | ----------------------- | ----------- | ------------------------ | ------------ |
 | May   | 0/4                     | 0%          | 0/6                      | 0%           |
-| Jun   | 0/6                     | 0%          | —                        | —            |
+| Jun   | 0/6                     | 0%          | N/A                      | N/A          |
 | Jul   | 47/101                  | 46.5%       | 102/120                  | 85.0%        |
 | Aug   | 282/538                 | 52.4%       | 72/111                   | 64.9%        |
-| Sep   | 7/153                   | 4.6%        | —                        | —            |
-| Oct   | —                       | —           | 0/5                      | 0%           |
+| Sep   | 7/153                   | 4.6%        | N/A                      | N/A          |
+| Oct   | N/A                     | N/A         | 0/5                      | 0%           |
 
 
-The gap isn't a val-vs-test modeling artifact — it's a **fire-count distribution difference between
+The gap isn't a val-vs-test modeling artifact, it's a **fire-count distribution difference between
 the two specific years landing on a month the model is already comparatively weak at**. Val (2023)
 had 153 fires in September alone (19% of its 802 total) that the model catches only 4.6% of the time
 (mean predicted risk on those fire-days: 0.31); test (2024) had essentially no September fires (0 out
 of 242) to be dragged down by. July/August capture rates are actually *higher* on val than the
-aggregate 41.9% suggests (46.5%/52.4%), much closer to test's July/August numbers (85.0%/64.9%) —
+aggregate 41.9% suggests (46.5%/52.4%), much closer to test's July/August numbers (85.0%/64.9%),
 it's the September cluster alone pulling val's blended number down, not systematically weaker
 July/August performance. This lines up with 2023 being BC's worst fire season on record, with
 large fires still active into September, while 2024 was comparatively quiet outside of a concentrated
@@ -320,24 +323,26 @@ July/August peak.
 
 **Why September specifically is weak, structurally:** the same reasoning as the [winter/shoulder-
 season blind spot](#known-limitation-a-wintershoulder-season-blind-spot) applies in miniature.
-September sits at the tail of the fire-season window — cooler and wetter on average than peak
-July/August — so it's a smaller-scale version of the same "hot+dry = risk" blind spot the model has
+September sits at the tail of the fire-season window, cooler and wetter on average than peak
+July/August, so it's a smaller-scale version of the same "hot+dry = risk" blind spot the model has
 for fully excluded winter months, just not severe enough on its own to justify excluding September
 from the fire-season window entirely (doing so would also throw away 153 real September positives
 from *training* data in every year, not just val's). Treated as the same documented weather-only
-limitation as the winter blind spot, not a bug — no code change made here, since the gap is explained
+limitation as the winter blind spot, not a bug, no code change made here, since the gap is explained
 by real between-year variation in *when* fires happened, not by a leak, split-boundary bug, or
 scoring inconsistency between val and test.
 
 ## Rolling-origin backtest: is 71.9% typical, or the best year in the dataset?
 
 The investigation above explains the *val-vs-test* gap, but it only compares two years. The deeper
-question it raises — "how much does the reported number move if you happen to test on a different
-year?" — needs more than two data points to answer honestly. `evaluation/backtest.py` answers it: keep
-`BEST_RANDOM_FOREST_PARAMS` fixed (no re-tuning per fold, to isolate "does the *evaluation year* matter"
-from "would retuning help"), refit on an **expanding** training window (2012 through year N-1), and
-score against each subsequent year N in turn, for N = 2017..2024 (2012-2016 reserved as a five-year
-floor before the first holdout, so the earliest fold isn't evaluating off a single year of history).
+question it raises, "how much does the reported number move if you happen to test on a different
+year?", needs more than two data points to answer honestly. `evaluation/backtest.py` answers it
+with a [rolling-origin backtest](glossary.md#rolling-origin-backtest): keep
+`BEST_RANDOM_FOREST_PARAMS` fixed (no re-tuning per fold, to isolate "does the *evaluation year*
+matter" from "would retuning help"), refit on an **expanding** training window (2012 through year
+N-1), and score against each subsequent year N in turn, for N = 2017..2024 (2012-2016 reserved as
+a five-year floor before the first holdout, so the earliest fold isn't evaluating off a single year
+of history).
 
 
 | year | train rows | holdout positives | PR-AUC | ROC-AUC | top-10% capture |
@@ -355,20 +360,20 @@ floor before the first holdout, so the earliest fold isn't evaluating off a sing
 **Sanity check first:** the 2023 row (train on everything before 2023) reproduces the original `val`
 numbers from [Re-tuning after the fire-season scope
 change](#re-tuning-after-the-fire-season-scope-change) *exactly* (PR-AUC 0.0136, ROC-AUC 0.833,
-top-10% 41.8%) — expected, since it's the same train set and the same holdout year, just computed by
+top-10% 41.8%), expected, since it's the same train set and the same holdout year, just computed by
 this script instead of `export_model.py`. The 2024 row is close to but not identical to the originally
 reported `test` numbers (71.9% there vs. 74.4% here) for a real reason, not noise: `export_model.py`'s
 served model trains only through 2022 (`TRAIN_END = "2023-01-01"`) and is scored against *both* val
 2023 and test 2024 without ever training on 2023's data, while this fold's training window includes
-2023 (one extra year) before scoring 2024 — a small, expected boost from more training data, not a
+2023 (one extra year) before scoring 2024, a small, expected boost from more training data, not a
 discrepancy to chase.
 
 **The headline number turns out to be close to the best year observed, not a typical one.** Across all
 8 folds: top-10% capture has mean **30.8%**, median **26.2%**, and a standard deviation of **~19
-percentage points** — on a metric that's bounded at 0% and 100%, that's enormous relative spread. The
+percentage points**, on a metric that's bounded at 0% and 100%, that's enormous relative spread. The
 71.9%/74.4% number this project has been citing as "the" result sits at the *top* of this range, tied
 with 2023 as the two best years out of eight; five of the eight backtested years land at 30% or below,
-and 2022 — trained on *more* data than 2017 or 2021 — is the worst of all at 8.2%.
+and 2022, trained on *more* data than 2017 or 2021, is the worst of all at 8.2%.
 
 **What doesn't explain the swing:** more training data. Training rows grow monotonically from 1.2M
 (2017) to 2.9M (2024), but top-10% capture doesn't track that at all (2022, with double 2017's
@@ -377,8 +382,8 @@ and 2021 (BC's two worst fire seasons on record, 1,433 and 2,628 positives) scor
 802-positive year and far worse than 2024's comparatively quiet 242-positive year. **What's more
 consistent with the evidence:** the same structural weakness documented in [Investigating the val/test
 gap](#investigating-the-valtest-gap-a-monthly-breakdown) and [Known
-limitation](#known-limitation-a-wintershoulder-season-blind-spot) above — the model is much stronger in
-peak July/August than at the fire-season's shoulders — so a year's score depends heavily on *when
+limitation](#known-limitation-a-wintershoulder-season-blind-spot) above, the model is much stronger in
+peak July/August than at the fire-season's shoulders, so a year's score depends heavily on *when
 within the season* its fires happened to land, which swamps both "how many fires" and "how much
 training data" as an explanation. See [Why performance swings by month and
 year](#why-performance-swings-by-month-and-year) below for the month-by-month breakdown that actually
@@ -387,22 +392,24 @@ tests this hypothesis, rather than just ruling out the two simpler explanations.
 **One reassuring, consistent result across every fold:** ROC-AUC never dropped below 0.62 in any of
 the 8 years (mean 0.747), meaning the model beat random ranking (0.5) in every single year tested,
 including the worst ones. The instability is in *how much* better than chance the model is in a given
-year, not *whether* it's better than chance at all — the model has real, year-round signal, it's just
+year, not *whether* it's better than chance at all, the model has real, year-round signal, it's just
 unevenly distributed across the fire-season calendar.
 
 **Practical takeaway:** don't repeat "71.9% top-10% capture" as if it were the model's expected
-real-world performance — cite the full range (8-74%, median ~26%) or, if a single number is needed,
+real-world performance, cite the full range (8-74%, median ~26%) or, if a single number is needed,
 the median rather than the best-observed year. This doesn't undo the earlier finding that the model
 beats chance by a wide, real margin (see [Baseline
-results](#baseline-results-2023-validation-set)) — it means the size of that margin is much less
+results](#baseline-results-2023-validation-set)), it means the size of that margin is much less
 certain, and much more year-dependent, than a single test-set number could show.
 
 ## Why performance swings by month and year
 
 The [backtest above](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset)'s leading
-hypothesis — that a year's score depends on *when in the season* its fires land — was only tested
+hypothesis, that a year's score depends on *when in the season* its fires land, was only tested
 informally on two years so far ([Investigating the val/test
-gap](#investigating-the-valtest-gap-a-monthly-breakdown)). `evaluation/backtest.py:: monthly_capture_breakdown` generalizes that by-hand table to every one of the 8 rolling-origin folds,
+gap](#investigating-the-valtest-gap-a-monthly-breakdown)). `evaluation/backtest.py::
+monthly_capture_breakdown` generalizes that by-hand table to every one of the 8 rolling-origin
+folds,
 using the exact same top-10%-by-risk cutoff `top_10pct_capture` scores against, broken down by month.
 
 **Pooled across all 8 years, the month-level pattern is unambiguous and consistent:**
@@ -418,16 +425,16 @@ using the exact same top-10%-by-risk cutoff `top_10pct_capture` scores against, 
 | Oct   | 214                    | 27     | **12.6%**    |
 
 
-May is by far the weakest month in the entire fire-season window — worse, in relative terms, than the
-already-documented September weakness — despite being included as "in season." October is the second
+May is by far the weakest month in the entire fire-season window, worse, in relative terms, than the
+already-documented September weakness, despite being included as "in season." October is the second
 weakest. June and July are the strongest, and August, despite being colloquially "peak fire season," is
 meaningfully weaker than July (28.2% vs. 39.4%) once pooled across 8 years rather than read off a single
 year. This is the clearest confirmation yet that the model's skill genuinely is concentrated in the
-core of the season and thins out at both edges — not just a two-year coincidence.
+core of the season and thins out at both edges, not just a two-year coincidence.
 
 **But month mix only partly explains the year-to-year swing, and the residual is informative.** Ranking
 each year by the *share* of its fires that landed in Jul/Aug (the two strongest months) against its
-overall `top_10pct_capture` gives a correlation of **r = 0.63** across the 8 folds — real and positive,
+overall `top_10pct_capture` gives a correlation of **r = 0.63** across the 8 folds, real and positive,
 but far from a complete explanation:
 
 
@@ -444,21 +451,21 @@ but far from a complete explanation:
 
 
 **2017 and 2021 are the outliers that keep this from being a clean story.** Both had 87-97% of their
-fires in the nominally-strongest months, yet both scored only 27-31% — worse than 2023's 79.7%-in-
+fires in the nominally-strongest months, yet both scored only 27-31%, worse than 2023's 79.7%-in-
 Jul/Aug year, and far worse than 2024's similarly Jul/Aug-heavy year (95.5% -> 74.4%). Both 2017 and
 2021 are BC's two worst fire seasons on record, and both show the same specific pattern when broken
-down further: 2021's August alone (1,009 fires — roughly 2-4x a typical year's *entire* season) was
+down further: 2021's August alone (1,009 fires, roughly 2-4x a typical year's *entire* season) was
 caught only **11.7%** of the time (118/1,009), even though August is a nominally strong month in every
 other year. That's consistent with a second, independent factor beyond month-of-season: **extreme,
 high-volume fire seasons seem to break the ranking even within their strong months**, plausibly because
-`top_10pct_capture` ranks a fixed ~24,000-row slice against the *entire* year at once — a season with
+`top_10pct_capture` ranks a fixed ~24,000-row slice against the *entire* year at once, a season with
 several times the normal fire count has that much more competition for the same fixed number of "top
 10%" slots, and/or extreme seasons plausibly involve a higher share of fires whose spread is driven by
 wind/fuel-continuity effects this weather-only feature set doesn't capture, not just heat and dryness.
 
 **Follow-up investigation, confirmed both mechanisms above are real.** Refitting just the 2017 and 2021
-folds (plus 2024 as a normal-year control) and comparing caught vs. missed fires directly on two axes —
-how many *other* cells ignited that same day, and how the raw weather features differ — found two
+folds (plus 2024 as a normal-year control) and comparing caught vs. missed fires directly on two axes,
+how many *other* cells ignited that same day, and how the raw weather features differ, found two
 separate, compounding effects, not one:
 
 **1. Extreme same-day fire counts directly overwhelm the fixed top-10% budget, but only past a
@@ -467,18 +474,18 @@ threshold.** Bucketing each year's fires by how many cells ignited on that exact
 
 | year           | 1 fire/day | 2-5   | 6-20  | 21-50     | 51-100 | 100+      |
 | -------------- | ---------- | ----- | ----- | --------- | ------ | --------- |
-| 2024 (control) | 0%         | 38.1% | 83.6% | 80.0%     | —      | —         |
-| 2017           | 7.7%       | 20.6% | 33.6% | 31.4%     | 23.1%  | —         |
+| 2024 (control) | 0%         | 38.1% | 83.6% | 80.0%     | N/A    | N/A       |
+| 2017           | 7.7%       | 20.6% | 33.6% | 31.4%     | 23.1%  | N/A       |
 | 2021           | 0.0%       | 15.2% | 24.2% | **41.5%** | 28.2%  | **15.1%** |
 
 
-In the normal-year control (2024, max 30 same-day fires), capture *rises* with same-day fire count —
+In the normal-year control (2024, max 30 same-day fires), capture *rises* with same-day fire count,
 more simultaneous ignitions means a hotter/drier/windier day, exactly the pattern the model is tuned to
 flag, so it catches most of a busy day at once. **2021 shows the opposite past a point**: capture peaks
 at 41.5% for 21-50-fire days, then *falls* to 28.2% and then 15.1% as same-day counts climb past 50 and
-past 100 — 2021 had entire days with 100+ simultaneous ignitions (581 fires fall in that single bucket
+past 100, 2021 had entire days with 100+ simultaneous ignitions (581 fires fall in that single bucket
 alone), something no other backtested year came close to. `top_10pct_capture` ranks a fixed ~24,000-row
-slice against the *whole year* (~144 rows/day if spread evenly across the 168-day season) — a single
+slice against the *whole year* (~144 rows/day if spread evenly across the 168-day season), a single
 day with 100+ real fires mechanically cannot all fit in that day's share of the budget even if the
 model correctly flags the whole day as extreme risk, especially when neighboring extreme days are
 competing for the same fixed slots. 2017 shows the same declining-past-the-peak shape at a smaller
@@ -499,16 +506,16 @@ The same "hot+dry gets caught, cool+wet gets missed" direction holds in every ye
 between caught and missed is roughly a third the size in 2021 as in the 2024 control. That's consistent
 with 2021's defining feature as a fire season: the June 2021 BC heat dome put much of the province
 under extreme heat/drought *simultaneously*, which compresses exactly the kind of cell-to-cell weather
-variation the model relies on to rank — when nearly every cell looks dangerously hot and dry at once,
+variation the model relies on to rank, when nearly every cell looks dangerously hot and dry at once,
 there's less relative signal left to separate which specific ones actually ignite that day, on top of
 the fixed-budget problem in (1).
 
 **Together:** month-of-season explains most of the routine year-to-year swing (r=0.63 above), and these
-two compounding effects — a fixed annual ranking budget breaking down on the most extreme same-day fire
-counts, plus weather variation itself compressing during province-wide extreme events — explain why the
+two compounding effects, a fixed annual ranking budget breaking down on the most extreme same-day fire
+counts, plus weather variation itself compressing during province-wide extreme events, explain why the
 two most severe fire seasons specifically underperform relative to their Jul/Aug-heavy month mix. Both
 are structural properties of a global, weather-only ranking approach on binary-outcome data, not bugs
-to fix with more features — the same conclusion the winter/shoulder-season blind spot investigation
+to fix with more features, the same conclusion the winter/shoulder-season blind spot investigation
 below reaches for a different structural gap.
 
 ## Known limitation: a winter/shoulder-season blind spot
@@ -530,7 +537,7 @@ seasonal split, not a uniformly-distributed error rate:
 
 July/August fires are caught almost perfectly; **December is 0/23 and February is 1/32**. Missed
 fires occur in conditions ~14.5K cooler, 23 percentage points more humid, and after ~5 more recent
-dry-free days than caught fires — the model has learned "hot + dry = risk", which nails summer
+dry-free days than caught fires, the model has learned "hot + dry = risk", which nails summer
 fire-weather but has no way to flag an ignition that happens *despite* cool, wet conditions. That's
 plausible for winter/shoulder-season fires specifically: they're more likely human-caused (debris
 burning, equipment, campfires) than fuel/weather-driven, and every feature in `FEATURE_COLUMNS` is
@@ -541,10 +548,13 @@ weather-derived.
 DataBC's public WFS endpoint for the Kamloops Fire Centre bbox, `FIRE_TYPE == "Fire"` only, 2012-2024)
 back this up directly: of 2,310 fire-season (May 1 - Oct 15) fires in the area, 59.5% are
 lightning-caused and 37.0% person-caused; of the 327 winter/shoulder-season (Nov-Apr) fires, that
-flips hard — **90.8% person-caused, 0.9% lightning**. December and February specifically (the two
-worst-missed months above) are the extreme case: every recorded winter/shoulder fire in those two
-months in this dataset (1 December fire, 3 February fires) is `Person`-caused. This is diagnostic
-confirmation only — `FIRE_CAUSE` exists solely for fires that already happened, so it can't become a
+flips hard, **90.8% person-caused, 0.9% lightning**. December and February specifically (the two
+worst-missed months above) are the extreme case: every winter/shoulder fire those incident records
+carry for those two months (1 December fire, 3 February fires) is `Person`-caused. Note these counts
+are BCWS *incidents*, not the FIRMS *detections* the table above counts, one incident can produce
+many detections across several satellite passes, which is why 23 December and 32 February detections
+map onto far fewer recorded fires. This is diagnostic
+confirmation only, `FIRE_CAUSE` exists solely for fires that already happened, so it can't become a
 per-cell/per-day predictive feature for days without one (see the "why this looks structural" note
 below); it just upgrades the human-cause explanation from a plausible read of weather conditions to a
 government-recorded fact, and rules out lightning-detection data (e.g. the Canadian Lightning
@@ -554,37 +564,37 @@ in the first place.
 Two feature-engineering attempts to close this gap were tried and **both failed to move it**:
 
 1. **Calendar features** (`day_of_year_sin`/`cos`, `is_weekend`, an `open_burning_season` flag
-  derived from the Kamloops Fire Centre's typical Category 2/3 burning-prohibition window) — the
+  derived from the Kamloops Fire Centre's typical Category 2/3 burning-prohibition window), the
    two day-of-year features became the model's top-2 by importance (40% combined, more than soil
    moisture), but December stayed 0/23 and February 1/32 exactly. Test top-10% capture barely moved
    (59.7% -> 60.7%) while val top-10% capture dropped hard (50.4% -> 33.1%).
 2. **Proximity features** (`dist_to_road_km`, `dist_to_place_km`, nearest-neighbor distance from
   each grid cell to OpenStreetMap roads/populated places, fetched via the Overpass API and joined
-   as static per-cell values) — same result: December 0/23, February 1/32, unchanged. Test top-10%
+   as static per-cell values), same result: December 0/23, February 1/32, unchanged. Test top-10%
    capture dropped to 48.9%. A diagnostic refit with much more capacity (uncapped depth, 400 trees,
    run purely to check whether the tuned model's shallow depth was the bottleneck rather than the
    features themselves) moved December/February by only 1-2 fires each while cratering every other
-   metric (test top-10% capture 26.4%) — the classic overfitting-to-majority-class-noise pattern
+   metric (test top-10% capture 26.4%), the classic overfitting-to-majority-class-noise pattern
    from the tuning results above, not evidence the added capacity was the fix.
 
-Neither addition was kept — both were reverted after evaluation, so they aren't in `FEATURE_COLUMNS`
+Neither addition was kept, both were reverted after evaluation, so they aren't in `FEATURE_COLUMNS`
 or `data/processed/kamloops_dataset.parquet` today, and there is no `proximity.py` or
 `ingest_geography.py` in the repo.
 
 **Why this looks structural rather than a missing-feature problem:** both attempts added *static*
-signal — a value fixed per calendar date or per grid cell, constant across the many days/cells it
+signal, a value fixed per calendar date or per grid cell, constant across the many days/cells it
 applies to. `top_10pct_capture` ranks every (cell, date) row in the entire test year against every
 other row for one global cutoff. A static offset can shift a cell's or a date's baseline risk up or
 down, but it cannot manufacture day-to-day variation within a cell, and it is nowhere near strong
 enough to lift a handful of winter fires above the tens of thousands of ordinary-looking winter
 non-fire rows it's competing against in that single global ranking. Fixing this for real would need a
 feature that varies *with the actual ignition event* day by day (e.g. real burn-permit records or
-lightning-strike data), which this project has no source for — not a different weather or calendar
+lightning-strike data), which this project has no source for, not a different weather or calendar
 proxy computed from data already on hand.
 
 **Conclusion:** treated as a documented limitation of a weather-only model rather than a bug to keep
 chasing with more features. The project's actual response to this, as of the [fire season
-scoping](#scoping-to-fire-season) above, isn't a season-specific threshold — it's excluding
+scoping](#scoping-to-fire-season) above, isn't a season-specific threshold, it's excluding
 Nov-Apr from the problem entirely, since those are the months this blind spot lives in and the
 months where the largest, most operationally-important fires don't occur anyway.
 
@@ -594,17 +604,17 @@ Before trusting the served RandomForest's predictions, it's worth checking that 
 from real fire-weather signal and not from an artifact of the grid, the join, or how the temporal
 split happens to fall. Two importance measures were compared:
 
-- **Mean decrease in impurity (MDI)** — `rf.feature_importances_`, built into the fitted model. Fast,
+- **Mean decrease in impurity (MDI)**, `rf.feature_importances_`, built into the fitted model. Fast,
 but biased toward continuous/high-cardinality features and only reflects the training set, so it can
 overstate a feature the model happened to split on a lot without that split actually helping predict
 new data.
-- **Permutation importance** — `sklearn.inspection.permutation_importance`, computed separately on the
+- **Permutation importance**, `sklearn.inspection.permutation_importance`, computed separately on the
 2023 val and 2024 test splits (10 repeats each, scored by PR-AUC, the project's primary metric).
 Shuffling one feature column at a time and measuring how much held-out PR-AUC drops is a more honest
 measure of what the model actually depends on to generalize, since it's evaluated on data the model
 never trained on.
 
-Both agree on the same ranking, which is reassuring — if MDI and permutation importance disagreed
+Both agree on the same ranking, which is reassuring, if MDI and permutation importance disagreed
 sharply, that would suggest the model was overfit to training-set idiosyncrasies rather than a real
 pattern:
 
@@ -625,12 +635,12 @@ pattern:
 
 Two takeaways:
 
-1. **The signal is real, not an artifact.** The top 5 features by both measures — soil moisture,
-  30-day precip, 7-day mean temp, raw temp, 7-day mean humidity — are exactly the slow-moving
+1. **The signal is real, not an artifact.** The top 5 features by both measures, soil moisture,
+  30-day precip, 7-day mean temp, raw temp, 7-day mean humidity, are exactly the slow-moving
    fuel-dryness indicators a wildfire-weather domain expert would expect to matter most. None of the
    grid/join mechanics (cell geometry, nearest-neighbor weather assignment) show up as unexpectedly
    dominant, which is what a subtle pipeline bug driving the score would look like.
-2. **Wind and the 7-day temp trend are dead weight in this model** — see [Dropping the dead-weight
+2. **Wind and the 7-day temp trend are dead weight in this model**, see [Dropping the dead-weight
   features](#dropping-the-dead-weight-features) below for what was actually done about it.
 
 ## Dropping the dead-weight features
@@ -654,18 +664,18 @@ picture still held:
 
 
 `wind_dir_cos`, `u10`, `v10`, `wind_dir_sin`, `d2m`, and `t2m_trend_7d` all confirmed near-zero or
-mixed-sign on both splits, both seeds — none of them cross even 15% of `rh_mean_7d`'s (the weakest
+mixed-sign on both splits, both seeds, none of them cross even 15% of `rh_mean_7d`'s (the weakest
 *kept* feature's) importance on either split, and several are actively negative. These six were
 dropped from `FEATURE_COLUMNS`.
 
 `wind_speed` **was kept, deviating from the original table's grouping.** Fresh evidence shows a real,
-reproducible positive signal on the test split specifically — +0.00044 to +0.00066 across both seeds,
-roughly half of `rh_mean_7d`'s test importance and nowhere near the ~0 cluster the other five sit in —
+reproducible positive signal on the test split specifically, +0.00044 to +0.00066 across both seeds,
+roughly half of `rh_mean_7d`'s test importance and nowhere near the ~0 cluster the other five sit in,
 even though it's slightly negative on val. Test is the split this project's own methodology treats as
 the honest, non-overfit read (see [Widening the
 search](#widening-the-search-randomizedsearchcv--predefinedsplit) above), so this was trusted over the
 weaker, noisier val signal. `u10`/`v10` (the raw wind vector components) were dropped in `wind_speed`'s
-place instead — not originally singled out by name, but grouped with the same dead-weight bucket in
+place instead, not originally singled out by name, but grouped with the same dead-weight bucket in
 the table above, and confirmed consistently negative-or-negligible on both splits/seeds in the fresh
 run, unlike `wind_speed` itself.
 
@@ -681,18 +691,18 @@ Refitting `BEST_RANDOM_FOREST_PARAMS` unchanged on the resulting 10-column `FEAT
 
 
 Confirms these columns really were dead weight rather than something the tuned hyperparameters
-happened to lean on — dropping them cost nothing measurable. The hyperparameters themselves weren't
+happened to lean on, dropping them cost nothing measurable. The hyperparameters themselves weren't
 re-tuned against the smaller feature set (that would mean re-running `tune_random_search`, which risks
 the `n_jobs=-1` `RandomizedSearchCV` hang noted as unresolved future work); this is a same-params
 refit only, and `data/processed/model.joblib` was re-exported from it via `export_model.py`. Nothing in
-`features/engineering.py` changed — `add_relative_humidity`/`add_wind_features` still need `d2m` and
+`features/engineering.py` changed, `add_relative_humidity`/`add_wind_features` still need `d2m` and
 `u10`/`v10` as *inputs* to derive `relative_humidity` and `wind_speed`, and `ENGINEERED_COLUMNS` still
 computes the dropped columns too (harmless, just unused by the model now); only the model's own input
 list shrank.
 
 **Why this matters beyond a smaller feature list:** it explains, in addition to the reasoning in
 [Known limitation](#known-limitation-a-wintershoulder-season-blind-spot) above, why the winter/shoulder
--season blind spot was so resistant to more weather features — the model's real levers are almost
+-season blind spot was so resistant to more weather features, the model's real levers are almost
 entirely slow-moving fuel-dryness signals (soil moisture, precip, temperature) plus one immediate
 condition (wind speed), and nothing in `FEATURE_COLUMNS` encodes anything about human activity, which
 is the more likely driver of winter ignitions. It also directly simplified [live weather
@@ -704,13 +714,13 @@ from dewpoint or wind vector components the way the ERA5-Land ingestion pipeline
 
 `research/neural-networks.md` argues against a neural network replacing the served RandomForest, but
 names one question it doesn't rule out: does a model that sees the **raw** last-30-days weather
-sequence per cell — instead of the hand-engineered rolling summaries above (`t2m_mean_7d`,
-`precip_30d`, ...) — capture a nonlinear temporal *shape* those summaries flatten away?
+sequence per cell, instead of the hand-engineered rolling summaries above (`t2m_mean_7d`,
+`precip_30d`, ...), capture a nonlinear temporal *shape* those summaries flatten away?
 `training/sequence_model.py` runs that experiment: a small 1D-CNN (two `Conv1d` layers, global
 average pooling, a small dense head) over 5 raw daily channels
 (`t2m`/`precip_mm`/`swvl1`/`relative_humidity`/`wind_speed`, the same quantities behind the current
-non-rolling features), trained with `BCEWithLogitsLoss(pos_weight=...)` — the PyTorch equivalent of
-`class_weight="balanced"` — under the exact same temporal train/val/test split as everything else on
+non-rolling features), trained with `BCEWithLogitsLoss(pos_weight=...)`, the PyTorch equivalent of
+`class_weight="balanced"`, under the exact same temporal train/val/test split as everything else on
 this page. The RandomForest side of the comparison is refit with the same tuned
 `BEST_RANDOM_FOREST_PARAMS` on the *exact same row subset* the CNN sees (a handful of rows lose their
 30-day raw window to date gaps that don't affect the rolling features), so the comparison is
@@ -728,13 +738,13 @@ Real result:
 
 
 The RandomForest wins on both splits, on every metric except test ROC-AUC (a near-tie, 0.884 vs.
-0.883) — most clearly on PR-AUC (roughly 1.2-1.7x higher) and top-10%-capture (4-5 points higher on
+0.883), most clearly on PR-AUC (roughly 1.2-1.7x higher) and top-10%-capture (4-5 points higher on
 both splits). The raw-sequence CNN did **not** find temporal shape the rolling-window features were
 missing; if anything, letting the model learn its own temporal summary from scratch, on a training
 set with only ~4,800 positive examples, generalized worse than the fixed 7-/30-day windows already
 being handed to a tree ensemble. This matches the general tabular-data literature
 `research/neural-networks.md` cites (tree ensembles beating deep learning on small, mostly-numeric
-tabular data) rather than being an exception to it — the one hypothesis that document left open is now
+tabular data) rather than being an exception to it, the one hypothesis that document left open is now
 closed, with a real negative result rather than an assumption.
 
 **Practical conclusion:** no change to the served model. `BEST_RANDOM_FOREST_PARAMS` (via
@@ -744,19 +754,19 @@ accuracy.
 
 ## Calibration: is `ignition_probability` a real probability?
 
-Every metric on this page so far — PR-AUC, ROC-AUC, `top_10pct_capture` — is **rank-only**: each one
+Every metric on this page so far, PR-AUC, ROC-AUC, `top_10pct_capture`, is **rank-only**: each one
 asks "are actual fires scored higher than non-fires," and every one of them is mathematically
 unchanged by any monotonic rescaling of the raw scores. A model can top all three while its raw
 `predict_proba` output is wildly wrong in absolute terms, which matters a lot here specifically,
 because `api/main.py`'s `/predict` and `/predict/live` both hand a caller `ignition_probability` as a
-bare float with no caveat — an obvious reading is "this cell has a 70% chance of igniting today" when
+bare float with no caveat, an obvious reading is "this cell has a 70% chance of igniting today" when
 it says 0.7. `evaluation/calibration.py` checks whether that reading is actually justified, via two
-tools that measure the thing rank metrics can't: **Brier score** (mean squared error between predicted
-probability and the {0,1} outcome — 0 is perfect, and a model that just always predicts the true base
-rate scores `base_rate * (1 - base_rate)`, a cheap floor to compare against) and a **reliability
-table** (bucket predictions by predicted-probability quantile, then compare each bucket's mean
-predicted probability against its actual observed fire rate — they should track each other for a
-calibrated model).
+tools that measure the thing rank metrics can't: **[Brier score](glossary.md#brier-score)** (mean
+squared error between predicted probability and the {0,1} outcome, 0 is perfect, and a model that
+just always predicts the true base rate scores `base_rate * (1 - base_rate)`, a cheap floor to
+compare against) and a **reliability table** (bucket predictions by predicted-probability quantile,
+then compare each bucket's mean predicted probability against its actual observed fire rate, they
+should track each other for a calibrated model).
 
 Run against the served model on both held-out splits:
 
@@ -769,7 +779,7 @@ Run against the served model on both held-out splits:
 
 **The served model's Brier score is ~40-100x *worse* (higher) than a trivial model that ignores every
 feature and always predicts the split's true base rate.** That's a real, specific finding, not a
-rounding effect — the reliability table shows exactly why:
+rounding effect, the reliability table shows exactly why:
 
 
 | val (2023) predicted-probability bin | mean predicted | observed rate |
@@ -786,30 +796,31 @@ rounding effect — the reliability table shows exactly why:
 | 0.685 - 0.912 (top decile)           | 0.852          | 1.382%        |
 
 
-The top decile — cells the model scores at a mean 85% ignition probability — actually ignites 1.38% of
+The top decile, cells the model scores at a mean 85% ignition probability, actually ignites 1.38% of
 the time on val (0.72% on test's equivalent bucket). Every bucket is monotonically ordered correctly
 (higher predicted score really does mean higher observed rate, which is exactly why the *rank* metrics
 above look good), but the absolute scale is off by roughly two orders of magnitude across the board,
 worst at the high end where it matters most for anyone reading the number literally.
 
 **Why, mechanically:** both `fit_random_forest` and `fit_logistic_regression` use
-`class_weight="balanced"` (see [Baseline-first methodology](#baseline-first-methodology) above) —
+`class_weight="balanced"` (see [Baseline-first methodology](#baseline-first-methodology) above),
 that's a deliberate, correct fix for the optimizer collapsing to "always predict majority class"
 during *fitting*, but it works by upweighting minority-class samples, which pushes `predict_proba`'s
 output toward the artificially-rebalanced distribution the trees were actually fit against rather
-than the true ~0.1-0.3% base rate. This is a known, expected side effect of `class_weight="balanced"`
-— not a bug, and not something the earlier feature-drop or hyperparameter re-tuning on this page
+than the true ~0.1-0.3% base rate. This is a known, expected side effect of `class_weight="balanced"`,
+not a bug, and not something the earlier feature-drop or hyperparameter re-tuning on this page
 would have caught, since none of `pr_auc`/`roc_auc`/`top_10pct_capture` can see it.
 
 **What this does and doesn't mean:** the served model's *ranking* is still real and still the thing
-`/risk-map` and the top-10%-capture story above rely on — nothing on this page about relative risk
+`/risk-map` and the top-10%-capture story above rely on, nothing on this page about relative risk
 changes. What changes is that `ignition_probability` in `api/main.py`'s responses should be read as a
-**relative risk score, not a literal probability** — "this cell is much higher-risk than that one,"
-not "this cell has an N% chance of burning" — see the caveat added to
-[07-serving.md](07-serving.md#calibration-what-ignition_probability-does-and-doesnt-mean). Fixing the
-absolute scale (e.g. `sklearn.calibration.CalibratedClassifierCV` with isotonic or Platt scaling,
-fit on val) is a legitimate follow-up, but it's a separate decision from this measurement — isotonic
-calibration on a split with only ~800 positives risks overfitting the calibration curve itself, and
+**relative risk score, not a literal probability**, "this cell is much higher-risk than that one,"
+not "this cell has an N% chance of burning", see the caveat added to
+[07-serving.md](07-serving.md#calibration-ignition_probability-vs-calibrated_probability). Fixing
+the absolute scale (e.g. `sklearn.calibration.CalibratedClassifierCV` with [isotonic or Platt
+scaling](glossary.md#calibration-isotonic-and-platt-scaling), fit on val) is a legitimate
+follow-up, but it's a separate decision from this measurement, isotonic calibration on a split
+with only ~800 positives risks overfitting the calibration curve itself, and
 recalibrating would need its own held-out check rather than reusing val/test as both the calibration
 fit and the evaluation set.
 
@@ -834,45 +845,45 @@ correction to apply, even if ranking performance isn't?
 | 2024 | 242       | 0.1048      | 0.0010          | 105.1x      | 0.814                     | 0.74%               | 110x             |
 
 
-**No — it's not stable either, and arguably worse than the ranking metric.** The Brier ratio alone
-spans 17x to 489x (a ~29x spread), and the top-decile ratio spans 30x to 2,673x (an ~88x spread) — a
+**No, it's not stable either, and arguably worse than the ranking metric.** The Brier ratio alone
+spans 17x to 489x (a ~29x spread), and the top-decile ratio spans 30x to 2,673x (an ~88x spread), a
 single "divide the raw probability by 50" correction that looked right in one year would be off by
 another order of magnitude in another.
 
 **But this needs one honest caveat before treating it at face value:** each `reliability_table` bin
-holds ~24,000 (cell, date) rows, but in a sparse fire year almost none of them are actual fires — the
+holds ~24,000 (cell, date) rows, but in a sparse fire year almost none of them are actual fires, the
 top-decile *observed rate* in a year with only 43-98 total positives is being estimated from a
 handful of real fires landing in that one bin, and one extra or missing fire swings that rate (and
 therefore the ratio) enormously in percentage terms. The pattern in the table above is consistent with
 that: the two years with by far
-the most positives (2021's 2,628, 2017's 1,433) — where the top-decile observed rate is estimated from
-enough real fires to be statistically meaningful — show the *smallest and most similar* ratios (30x,
+the most positives (2021's 2,628, 2017's 1,433), where the top-decile observed rate is estimated from
+enough real fires to be statistically meaningful, show the *smallest and most similar* ratios (30x,
 47x), while the sparsest years (2019's 57, 2020's 43, 2022's 98) show the wildest and largest ones. The
 Brier ratio (computed over the *whole* holdout year, not just one bin of it) is somewhat less exposed
 to this but shows the same shape (17-37x for the two big-fire years vs. 95-489x for the sparse ones).
 
 **Practical reading:** the most statistically trustworthy estimate of "how miscalibrated is this model,
-really" comes from the years with the most fires to estimate an observed rate from — 2017/2021/2023 all
+really" comes from the years with the most fires to estimate an observed rate from, 2017/2021/2023 all
 cluster in the **17-47x** range for the Brier ratio, which is a more defensible number to reason about
 than the full 17-489x spread. But this doesn't rescue the case for recalibrating now: a correction
 factor estimated mostly from three unusually severe fire years (2017, 2021, and 2023, the latter itself
 close to 2017/2021 in severity) is exactly the kind of single-scenario overfit this whole investigation
-exists to catch — there is no evidence yet that the *same* correction would hold in a below-average
+exists to catch, there is no evidence yet that the *same* correction would hold in a below-average
 year like 2019 or 2020, and the small-sample years are too noisy to confirm or rule that out either
 way. **Recommendation: don't fit a single static recalibration yet.** If/when this gets revisited, pool
 observed-vs-predicted data across many years (not just the high-confidence ones) before fitting, and
 validate the resulting calibrator's stability across individual holdout years the same way this table
-does — a calibrator that only gets checked in aggregate could hide the exact same year-to-year
+does, a calibrator that only gets checked in aggregate could hide the exact same year-to-year
 instability the aggregate `ignition_probability` numbers already did.
 
 ### Does pooled, leave-one-year-out-validated calibration actually help?
 
 `evaluation/calibration.py::leave_one_year_out_calibration_check` does exactly what the recommendation
 above asks for: for each of the 8 rolling-origin years, fit a calibrator on every *other* year's pooled
-`(y_score, y_true)` pairs, apply it to the held-out year, and compare against doing nothing — the honest
+`(y_score, y_true)` pairs, apply it to the held-out year, and compare against doing nothing, the honest
 test of whether pooling generalizes to a year it never saw, not whether it fits the years it was trained
 on. Two calibration methods are compared: isotonic regression (a flexible monotonic curve) and sigmoid/
-Platt scaling (a single logistic curve) — see `fit_isotonic_calibrator`/`fit_sigmoid_calibrator`.
+Platt scaling (a single logistic curve), see `fit_isotonic_calibrator`/`fit_sigmoid_calibrator`.
 
 
 | year | positives | pooled calibration-fit positives | raw Brier | isotonic Brier | sigmoid Brier | raw top-decile ratio | isotonic top-decile ratio | sigmoid top-decile ratio |
@@ -887,10 +898,10 @@ Platt scaling (a single logistic curve) — see `fit_isotonic_calibrator`/`fit_s
 | 2024 | 242       | 5,290                            | 0.1048    | 0.0010         | 0.0010        | 109.6x               | 1.96x                     | 2.08x                    |
 
 
-(top-decile ratio = mean predicted / observed rate in the top-scored bucket, matching the table above —
+(top-decile ratio = mean predicted / observed rate in the top-scored bucket, matching the table above,
 1.0x is perfect; both above and below 1.0x are miscalibrated.)
 
-**Pooled calibration is a real, substantial improvement — but it doesn't solve the underlying
+**Pooled calibration is a real, substantial improvement, but it doesn't solve the underlying
 instability, it just moves the whole cluster of numbers much closer to correct.** Two separate results,
 not one:
 
@@ -899,33 +910,33 @@ not one:
    mechanical, not a deep achievement: Brier score is dominated by the huge majority of true-negative
    rows, and *any* calibration that shrinks scores toward the true ~0.1–0.3% base rate collapses their
    squared error, almost regardless of whether the shrinkage is precisely right for that specific year.
-2. **The top-decile ratio — the number that actually answers "is a highly-scored cell's probability
-  meaningful" — improves in absolute terms in every year (worst case 2,673x → 51x) but the *relative
+2. **The top-decile ratio, the number that actually answers "is a highly-scored cell's probability
+  meaningful", improves in absolute terms in every year (worst case 2,673x → 51x) but the *relative
    spread between the best- and worst-calibrated held-out year barely changes*: ~89x (2,673/30 raw) vs.
    ~95x (51/0.54 isotonic).** Pooling shifts every year's number much closer to 1.0x, but it doesn't make
-   the years agree with each other any better than before — the year-to-year instability this whole
+   the years agree with each other any better than before, the year-to-year instability this whole
    investigation set out to check for is still there, just rescaled to a smaller absolute range.
 
 **The years that stay worst-calibrated after pooling are exactly the sparsest-fire years** (2018's 229,
-2019's 57, 2020's 43, 2022's 98 positives — still 6x–51x off), while the years with the most fires to
+2019's 57, 2020's 43, 2022's 98 positives, still 6x–51x off), while the years with the most fires to
 estimate a top-decile rate from land closest to 1.0x (2017 sigmoid: 0.87x, 2021 isotonic: 0.54x, 2023
 isotonic: 1.27x). This matches the same statistical-noise explanation already given above for the raw
 numbers: a sparse year's *observed* top-decile rate is itself being estimated from a handful of real
-fires, so no calibrator — however well pooled — can be checked precisely against that little ground
+fires, so no calibrator, however well pooled, can be checked precisely against that little ground
 truth in a single held-out year.
 
 **Revised practical recommendation:** a pooled calibrator is worth having as a materially better default
-than the raw score — it cuts the worst-case absolute miscalibration by roughly 50x — but it is not
+than the raw score, it cuts the worst-case absolute miscalibration by roughly 50x, but it is not
 "solved calibration." Its own accuracy is still meaningfully year-dependent, particularly for low-fire
 years, in a way this single leave-one-year-out check can't fully rule out getting worse on a future year
 unlike any of the 8 tested.
 
 **Promoted to the served model**, on that basis: `training/export_model.py::export_current_best` now
-fits this same pooled isotonic calibrator (all 8 years combined, not held-one-out — the LOYO split
+fits this same pooled isotonic calibrator (all 8 years combined, not held-one-out, the LOYO split
 above exists to validate the method, not to leave a year out of the production fit) and attaches it to
 the `ModelBundle`, exposed via `/predict`'s and `/predict/live`'s `calibrated_probability` and
 `/risk-map`'s `calibrated_risk_probability` (see [Serving](07-serving.md#calibration-ignition_probability-vs-calibrated_probability)).
-`ignition_probability`/`risk_probability` are unchanged and still the field to use for ranking — the
+`ignition_probability`/`risk_probability` are unchanged and still the field to use for ranking, the
 calibrator only rescales magnitude, and the caveat above (particularly unreliable in low-fire years)
 still applies to the calibrated number, so treat it as a much-improved estimate, not an exact one.
 
@@ -934,22 +945,24 @@ still applies to the calibrated number, so treat it as a much-improved estimate,
 This dev machine has an NVIDIA GPU (RTX 4060 Laptop), which raised the obvious question: can any of
 this project's CPU-bound tuning move to it? The honest answer splits by model:
 
-- **XGBoost has native GPU support** — `tree_method="hist", device="cuda"` on the same
+- **XGBoost has native GPU support**, `tree_method="hist", device="cuda"` on the same
 `XGBClassifier` used everywhere else in this project. No algorithm change, just a device flag.
-- **RandomForest does not** — `sklearn.ensemble.RandomForestClassifier` has no GPU code path at all.
+- **RandomForest does not**, `sklearn.ensemble.RandomForestClassifier` has no GPU code path at all.
 The GPU-accelerated equivalent is RAPIDS' `cuml.ensemble.RandomForestClassifier`, but RAPIDS has
 never shipped native Windows support (WSL2 only), which is a separate Linux environment, not a
 package this project's `.venv` can just add. RandomForest tuning stays CPU-only here.
 
 **A real driver/CUDA-version mismatch had to be diagnosed and fixed before GPU XGBoost worked at
-all — worth recording the shape of it, not just the fix.** The first attempt looked like it worked
-(no error) but silently trained on CPU: `XGBClassifier(device="cuda").fit(...)` logged `WARNING: No visible GPU is found, setting device to CPU`, even though `nvidia-smi` clearly saw the RTX 4060 and
+all, worth recording the shape of it, not just the fix.** The first attempt looked like it worked
+(no error) but silently trained on CPU: `XGBClassifier(device="cuda").fit(...)` logged
+`WARNING: No visible GPU is found, setting device to CPU`, even though `nvidia-smi` clearly saw the
+RTX 4060 and
 `xgboost.build_info()` confirmed the installed wheel was compiled `USE_CUDA: True`. The actual cause
 was a version mismatch one layer down: that wheel (xgboost 3.4.0) was built against **CUDA 13.3**,
 which requires driver ≥590, and the machine's installed driver was 576.52 (good for CUDA up to
-12.9) — new enough that `nvidia-smi` worked fine, too old for this specific XGBoost build's CUDA
+12.9), new enough that `nvidia-smi` worked fine, too old for this specific XGBoost build's CUDA
 runtime. XGBoost doesn't error on that mismatch, it just falls back, so a clean run is not by itself
-proof the GPU was used — confirmed the diagnosis by reproducing outside the tool sandbox too, to
+proof the GPU was used, confirmed the diagnosis by reproducing outside the tool sandbox too, to
 rule out a sandboxing artifact before concluding it was a driver issue. Fixed by updating the NVIDIA
 driver to 596.49 (reports CUDA 13.2 support, comfortably above the ≥590 floor); re-verified with a
 smoke fit that logged `XGBoost is running on: cuda:0` and with `nvidia-smi` showing real GPU
@@ -960,21 +973,21 @@ The same fix unblocked a second, unrelated GPU consumer: `training/sequence_mode
 written in from the start, but the default PyPI `torch` wheel is CPU-only, so it was silently
 running on CPU the whole time despite the code being GPU-ready. Fixed via `pyproject.toml`'s new
 `[tool.uv.sources]`/`[[tool.uv.index]]` entries pinning `torch` to the `cu132` build (matching the
-driver's reported CUDA 13.2, same as the XGBoost fix above) — confirmed via
+driver's reported CUDA 13.2, same as the XGBoost fix above), confirmed via
 `torch.cuda.is_available()` returning `True` and `torch.cuda.get_device_name(0)` naming the RTX
 4060. Not yet benchmarked, since `sequence_model.py` hasn't been re-run since; that's a separate,
 still-open follow-up.
 
-**What changed in code:** `training/tune_xgboost_gpu.py` is a new, standalone entry point — same
+**What changed in code:** `training/tune_xgboost_gpu.py` is a new, standalone entry point, same
 search space (`XGBOOST_DISTRIBUTIONS`, `N_ITER=15`) and same `PredefinedSplit`-based temporal-safety
 guarantee as the CPU XGBoost randomized search above, just with `tree_method="hist", device="cuda"`.
 `tune_random_search` gained an `n_jobs` parameter (default `-1`, so every existing call is
 unaffected) specifically so this script can pass `n_jobs=1`: `RandomizedSearchCV`'s `n_jobs`
 controls how many candidates run in parallel *processes*, which is exactly the right idea for CPU
-cores but the wrong one for a single GPU — parallel processes would contend for the same device
+cores but the wrong one for a single GPU, parallel processes would contend for the same device
 instead of speeding anything up, and can throw CUDA out-of-memory errors depending on model/data
 size. `advanced_models.py`'s own `__main__` was trimmed to drop its CPU XGBoost randomized-search
-leg, since `tune_xgboost_gpu.py` now covers that exact search on GPU instead — redoing it on CPU
+leg, since `tune_xgboost_gpu.py` now covers that exact search on GPU instead, redoing it on CPU
 would be pure duplicate work.
 
 **Measured result, same tuning session (2026-08-17):** the GPU XGBoost randomized search (15
@@ -989,16 +1002,16 @@ it in the same session (also 15 candidates, same `tune_random_search` infrastruc
 
 
 **This is not a clean same-algorithm GPU-vs-CPU benchmark, and shouldn't be read as "XGBoost is
-~1000x faster on this GPU" — say so plainly.** Two different algorithms are being compared (there is
+~1000x faster on this GPU", say so plainly.** Two different algorithms are being compared (there is
 no CPU-vs-GPU number for the *same* algorithm here, since RandomForest has no GPU path to compare
 against at all), and the RandomForest side is deliberately single-threaded per candidate
 (`n_jobs=1` on the estimator, so `RandomizedSearchCV`'s own `n_jobs=-1` parallelizes across
-candidates instead — see
+candidates instead, see
 [Widening the search](#widening-the-search-randomizedsearchcv--predefinedsplit)), which is slower
 per-candidate than RandomForest's usual all-cores mode by design, not a fair "best CPU can do"
 number either. What the comparison does honestly support: GPU histogram training made
-this project's existing 15-candidate tuning search — the same infrastructure, same temporal-safety
-guarantees, same search width — go from a multi-hour CPU run to a sub-minute one for XGBoost
+this project's existing 15-candidate tuning search, the same infrastructure, same temporal-safety
+guarantees, same search width, go from a multi-hour CPU run to a sub-minute one for XGBoost
 specifically, which is the actual, practical win, even without a precise multiplier attached to it.
 
 One more open thread this surfaced, not yet chased down: the CPU RandomForest randomized search's
@@ -1007,17 +1020,17 @@ baseline cited [above](#widening-the-search-randomizedsearchcv--predefinedsplit)
 earlier tuning round. That earlier number predates the fire-season scope change and the 2012 training
 extension, so the datasets aren't the same shape, and `n_jobs=-1`'s process-based parallelism on
 Windows already has a documented history of erratic scaling in this project (see the `n_iter=40`
-abandonment noted in the same earlier section) — plausible explanations, not a confirmed cause. Worth
+abandonment noted in the same earlier section), plausible explanations, not a confirmed cause. Worth
 a closer look if CPU-side tuning time becomes a bottleneck again, but out of scope for this GPU setup
 work specifically.
 
 ## Adding `cape`/`convective_precip_mm` to `FEATURE_COLUMNS`
 
-`cape` and `convective_precip_mm` (full ERA5's CAPE and convective precipitation — see
+`cape` and `convective_precip_mm` (full ERA5's CAPE and convective precipitation, see
 [Weather join](04-weather-join.md#a-second-weather-source-full-era5s-cape-and-convective-precipitation)
 for what they are and why they were fetched) had already been joined into
 `kamloops_dataset.parquet` and enforced for completeness by `drop_incomplete_history`, but were
-**not actually in** `FEATURE_COLUMNS` — no model was training on them. `training/baseline.py` now
+**not actually in** `FEATURE_COLUMNS`, no model was training on them. `training/baseline.py` now
 includes both, added as a pair (matching how they were fetched and engineered together), bringing
 `FEATURE_COLUMNS` to 12 columns.
 
@@ -1026,9 +1039,9 @@ includes both, added as a pair (matching how they were fetched and engineered to
 `advanced_models.py` (CPU RandomForest, both the 8-candidate grid and the 15-candidate randomized
 search) and `tune_xgboost_gpu.py` (GPU XGBoost, 15-candidate randomized search) were re-run against
 the 12-column `FEATURE_COLUMNS` overnight. The only apples-to-apples comparison available is against
-the currently-served model from [the fire-season re-tune above](#re-tuning-after-the-fire-season-scope-change)
-— same search infrastructure, same `PredefinedSplit`, same train/val/test years, the only difference
-being these two extra columns:
+the currently-served model from [the fire-season re-tune
+above](#re-tuning-after-the-fire-season-scope-change), same search infrastructure, same
+`PredefinedSplit`, same train/val/test years, the only difference being these two extra columns:
 
 
 |                                                   | params                                             | test PR-AUC | test ROC-AUC | test top-10% capture |
@@ -1037,27 +1050,27 @@ being these two extra columns:
 | RandomForest, 12 features incl. cape (2026-08-17) | 438 trees, depth 7, max_features 0.775, min_leaf 8 | 0.00985     | 0.876        | 69.4%                |
 
 
-Adding `cape`/`convective_precip_mm` did not improve any test-set metric — the 12-feature run is
+Adding `cape`/`convective_precip_mm` did not improve any test-set metric, the 12-feature run is
 slightly **worse** on all three. Worth being precise about what that does and doesn't show: the old
 10-feature winning hyperparameters (238/6/0.606/7) were themselves resampled inside this run's
-15-candidate search and scored a val PR-AUC of 0.01388, a near-tie with the new winner's 0.01406 — so
+15-candidate search and scored a val PR-AUC of 0.01388, a near-tie with the new winner's 0.01406, so
 `RandomizedSearchCV` picked a different candidate on a razor-thin val margin, and that candidate
 happens to generalize slightly worse to the untouched 2024 test year. That's the same single-fold
 val-selection noise this document already flags elsewhere (e.g. the val/test gap discussion above), not
-strong evidence that CAPE/convective precip actively hurt the model — but it's equally not evidence
+strong evidence that CAPE/convective precip actively hurt the model, but it's equally not evidence
 they help. With only 15 sampled candidates and one test year, this is thin evidence either way, and
 a larger `n_iter` or a rolling-origin backtest (matching [the calibration
-work's](#does-pooled-leave-one-year-out-validated-calibration-help) methodology) would be needed to
-say more.
+work's](#does-pooled-leave-one-year-out-validated-calibration-actually-help) methodology) would be
+needed to say more.
 
 **Decision: keep serving the existing 10-feature model, not tonight's result.** `export_model.py`'s
-`BEST_RANDOM_FOREST_PARAMS` and `data/processed/model.joblib` are **unchanged** — re-running
+`BEST_RANDOM_FOREST_PARAMS` and `data/processed/model.joblib` are **unchanged**, re-running
 `export_model.py` right now would have silently pulled in the new 12-column `FEATURE_COLUMNS` (it's a
 global import, not something the export step can selectively ignore) under the old hyperparameters, an
 untested combination, so the safer choice was to leave the already-persisted, already-validated bundle
 alone rather than promote anything new. This leaves a real inconsistency worth naming: `baseline.py`'s
 `FEATURE_COLUMNS` (used by `advanced_models.py`/`tune_xgboost_gpu.py` for any future tuning run) now
-lists 12 columns, while the model actually being served was fit on only the first 10 — each
+lists 12 columns, while the model actually being served was fit on only the first 10, each
 `ModelBundle` snapshots its own `feature_columns` at export time, so `api/main.py` and `/predict` stay
 correct regardless, but a future re-tune session should not assume the served model already reflects
 `cape`/`convective_precip_mm` just because `FEATURE_COLUMNS` includes them now.
@@ -1065,10 +1078,10 @@ correct regardless, but a future re-tune session should not assume the served mo
 **A dormant known limitation, not currently active:** `/predict/live` works fine right now, because the
 served model was fit on the 10-column set and never asks for `cape`/`convective_precip_mm`. But the
 moment a future export actually promotes a model trained on the 12-column `FEATURE_COLUMNS`,
-`/predict/live` breaks — Open-Meteo's historical archive API (the live-weather source
-`features/live_weather.py` uses instead of ERA5-Land — see
+`/predict/live` breaks, Open-Meteo's historical archive API (the live-weather source
+`features/live_weather.py` uses instead of ERA5-Land, see
 [Serving](07-serving.md#live-weather-for-predictlive)) has no `convective_precipitation_sum` parameter
-at all, and accepts `cape`/`cape_mean` as parameter names but returns `null` for every value tested —
+at all, and accepts `cape`/`cape_mean` as parameter names but returns `null` for every value tested,
 the data isn't actually populated in their archive product, only their forecast product. So this is
 worth resolving (a live CAPE/convective-precipitation source, or dropping the columns again) *before*
 any future re-tune's result is good enough to actually promote, not after. `features/convective.py`/
@@ -1078,7 +1091,7 @@ something today's result argues for deleting.
 
 ## Future directions: four researched proposals (2026-08-17)
 
-**Proposals 1 and 2 below have since been implemented** — see [Spatial-lag features: implemented and
+**Proposals 1 and 2 below have since been implemented**, see [Spatial-lag features: implemented and
 promoted (2026-08-19)](#spatial-lag-features-implemented-and-promoted-2026-08-19) and [SHAP
 explainability: implemented (2026-08-19)](#shap-explainability-implemented-2026-08-19), each after its
 original proposal text. Proposals 3-4 remain research/planning records, not results, investigated by
@@ -1090,30 +1103,33 @@ Ranked by novelty-to-effort ratio, most promising first.
 ### 1. Spatial-lag features (neighbor cells' recent fire history)
 
 Every model in this project, including the sequence-modeling experiment below, treats each grid cell
-as fully independent — nothing ever looks at a neighboring cell's weather or fire history, despite
+as fully independent, nothing ever looks at a neighboring cell's weather or fire history, despite
 this being a regular geospatial grid. `features/grid.py::assign_cell_ids` makes this cheap to fix:
 `cell_id` is literally `"{row}_{col}"` from integer floor-division on a regular lat/lon grid, so a
-cell's 8 (Moore) neighbors are plain string construction (`f"{row±1}_{col±1}"`) — no KDTree/STRtree/
+cell's 8 (Moore) neighbors are plain string construction (`f"{row±1}_{col±1}"`), no KDTree/STRtree/
 GDAL needed, matching this project's existing "no GDAL, plain lat/lon math" style.
 
-**Proposed feature:** `neighbor_fire_count_Nd` (N ∈ {1, 3, 7}) — count of the 8 neighboring cells
+**Proposed feature:** `neighbor_fire_count_Nd` (N ∈ {1, 3, 7}), count of the 8 neighboring cells
 with `ignited=1` in the trailing N days, computed via a `date` × `cell_id` → `ignited` pivot, shifted,
 then summed across each cell's neighbor columns. No new dependency; drops straight into the existing
 `FEATURE_COLUMNS`/RandomForest/XGBoost pipeline.
 
-**The real hypothesis — and a self-correction worth keeping.** The initial framing assumed this would
+**The real hypothesis, and a self-correction worth keeping.** The initial framing assumed this would
 help the [winter/shoulder-season blind
 spot](#known-limitation-a-wintershoulder-season-blind-spot), but this project's own confirmed data
-argues against that: December/February fires are 90.8% person-caused and only 4 total across
-2012-2024 — isolated point-source ignitions, not spatially contiguous events. The two static
+argues against that: December/February fires are 90.8% person-caused and, in BCWS's incident
+records, only 4 across 2012-2024, isolated point-source ignitions, not spatially contiguous
+events. The two static
 distance-to-road/town features already tried and reverted for exactly that blind spot (see
 [above](#known-limitation-a-wintershoulder-season-blind-spot)) failed for the same underlying reason.
 The better-fit hypothesis is **fire-season spread dynamics** instead: a real wildfire physically
 growing into adjacent grid cells over consecutive days, which no current model can see. Worth
 checking the winter months anyway since it's cheap, but that's not the expected win.
 
-**Leakage — the one thing that must be gotten exactly right:** only strictly prior-day (`date ≤ D-1`) neighbor status may be used. Same-day neighbor `ignited` would leak, since one large fire
-spanning multiple grid cells gets detected the same FIRMS day — same-day neighbor status would
+**Leakage, the one thing that must be gotten exactly right:** only strictly prior-day
+(`date ≤ D-1`) neighbor status may be used. Same-day neighbor `ignited` would leak, since one large
+fire
+spanning multiple grid cells gets detected the same FIRMS day, same-day neighbor status would
 trivially predict the target and wouldn't exist yet at real prediction time. Same lagging discipline
 `days_since_rain`/`precip_7d` already use; the risk is implementing this as a same-day join by
 mistake.
@@ -1124,13 +1140,13 @@ mistake.
 
 **Evaluation:** same temporal split (train ≤2022/val 2023/test 2024), same `tune_model`/PR-AUC/
 top-10%-capture framework, real comparison against the current RandomForest on identical rows,
-matching `sequence_model.py`'s own methodology — adopted only on a measured win, not on the idea's
+matching `sequence_model.py`'s own methodology, adopted only on a measured win, not on the idea's
 plausibility.
 
-**A GNN was explicitly considered and rejected for now** — no evidence a graph architecture would
+**A GNN was explicitly considered and rejected for now**, no evidence a graph architecture would
 beat RandomForest fed the same aggregate neighbor stats as ordinary features, and it's a heavier,
 unproven lift (`torch_geometric`'s compatibility with the pinned `torch==2.13.0+cu132` build isn't
-even verified yet). Matches this project's baseline-first bias — simple features first, more
+even verified yet). Matches this project's baseline-first bias, simple features first, more
 architecture only if the simple version shows real signal.
 
 **Effort/risk:** low-medium, roughly one session, no new dependency. Main risk is the leakage guard
@@ -1142,14 +1158,14 @@ above, not the modeling idea itself.
 `neighbor_fire_count_{1,3,7}d`, a strictly-prior-day count of each cell's 8 Moore neighbors that
 ignited in the trailing N days. Implementation detail worth naming: rather than looping per cell, the
 whole `(date × cell_id)` ignited panel is shifted forward one day (so day *D*'s row holds day *D-1*'s
-ignited status — the leakage guard the proposal called out as the one thing that must be exactly
+ignited status, the leakage guard the proposal called out as the one thing that must be exactly
 right), rolled per window, then multiplied by a dense 0/1 Moore-adjacency matrix built once from
-`cell_id`'s `"{row}_{col}"` scheme — a single matrix multiply per window instead of 1,443 separate
+`cell_id`'s `"{row}_{col}"` scheme, a single matrix multiply per window instead of 1,443 separate
 per-cell sums, and fast enough (a few seconds) that no sparse-matrix dependency was needed. Added to
 `ENGINEERED_COLUMNS` (so `drop_incomplete_history` enforces its own 1/3/7-day warm-up the same way it
 does for `precip_7d`/`precip_30d`) and to `training/baseline.py::FEATURE_COLUMNS`, in place of
-`cape`/`convective_precip_mm` (left out of the active feature list for this run, not deleted — see
-that section above — to keep this a clean, single-variable test against the served 10-feature model
+`cape`/`convective_precip_mm` (left out of the active feature list for this run, not deleted, see
+that section above, to keep this a clean, single-variable test against the served 10-feature model
 rather than a result confounded by an already-inconclusive pair of columns).
 
 **The result is far larger than any other change tried on this project, and was checked hard for
@@ -1164,16 +1180,16 @@ leakage before being trusted.** Refitting the served model's exact hyperparamete
 
 
 A freshly GPU-tuned XGBoost (`tune_xgboost_gpu.py`, `XGBOOST_DISTRIBUTIONS`, 15 candidates, same
-13-column set) independently landed at a similar order of magnitude — test PR-AUC 0.372, ROC-AUC
-0.950, top-10% capture 86.4% — confirming this isn't one model family's quirk. MDI feature importance
+13-column set) independently landed at a similar order of magnitude, test PR-AUC 0.372, ROC-AUC
+0.950, top-10% capture 86.4%, confirming this isn't one model family's quirk. MDI feature importance
 on the refit RandomForest shows `neighbor_fire_count_7d`/`_3d`/`_1d` at 0.570/0.238/0.083
 respectively (89% of total importance combined), dwarfing `swvl1` (previously the top feature at
-0.269, now 0.020) — the model now leans on this feature almost exclusively.
+0.269, now 0.020), the model now leans on this feature almost exclusively.
 
 **Why this isn't leakage, checked directly rather than assumed:** a jump this large demands the same
-scrutiny the `tp` accumulation bug in [Weather join](04-weather-join.md#the-tp-bug-and-how-it-was-
-actually-caught) got — internal consistency (no crash, a plausible-looking pattern) isn't proof of
-correctness. Three checks, not one:
+scrutiny the `tp` accumulation bug in [Weather
+join](04-weather-join.md#the-tp-bug-and-how-it-was-actually-caught) got, internal consistency (no
+crash, a plausible-looking pattern) isn't proof of correctness. Three checks, not one:
 
 1. **Ignited-rate-by-bucket is monotonic and physically sane**, not a step function that would
   suggest a same-day identity leak: `neighbor_fire_count_1d = 0` -> 0.04% ignition rate (near the
@@ -1183,41 +1199,42 @@ correctness. Three checks, not one:
   column, confirms the shift-then-roll logic: a cell that ignited 2021-08-19 shows
    `neighbor_fire_count_1d = 1` because a Moore neighbor ignited the prior day (2021-08-18), rising to
    `neighbor_fire_count_3d/7d = 2` as the fire visibly spread across neighboring cells over the
-   following days — the feature is tracking real, physical fire spread, not an artifact. A separate
+   following days, the feature is tracking real, physical fire spread, not an artifact. A separate
    fire with no local precursor correctly shows all three counts at 0.
 3. **Same-day exclusion holds**: for that same manually-traced fire, the day *before* ignition
-  (2021-08-18, when no neighbor had yet ignited) correctly shows `neighbor_fire_count_1d = 0` — a
+  (2021-08-18, when no neighbor had yet ignited) correctly shows `neighbor_fire_count_1d = 0`, a
    same-day leak would have shown a nonzero count one day earlier than it should.
 
 **Why the effect size makes sense, not just why it isn't a bug:** every prior feature in
-`FEATURE_COLUMNS` is weather — a slow-moving proxy for fuel dryness. `neighbor_fire_count` is the
+`FEATURE_COLUMNS` is weather, a slow-moving proxy for fuel dryness. `neighbor_fire_count` is the
 first feature that's a direct, physical precursor of the event itself: on a 5km grid, a wildfire
 actively burning in an adjacent cell is about as strong a same-week ignition signal as this project
 could hand a model, categorically different from "the air is hot and dry nearby." This also reframes
-part of the [rolling-origin backtest instability](#rolling-origin-backtest-is-719-typical-or-the-best-
-year-in-the-dataset) and [extreme-year degradation](#why-performance-swings-by-month-and-year)
-findings above: those were diagnosed against a purely weather-driven model with no way to see a fire
-already spreading nearby, which this feature directly targets — re-verified below in [Re-verifying the
+part of the [rolling-origin backtest
+instability](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset) and
+[extreme-year degradation](#why-performance-swings-by-month-and-year) findings above: those were
+diagnosed against a purely weather-driven model with no way to see a fire
+already spreading nearby, which this feature directly targets, re-verified below in [Re-verifying the
 rolling-origin backtest against the 13-feature
 model](#re-verifying-the-rolling-origin-backtest-against-the-13-feature-model), not left as an
 assumption.
 
 **Promoted to the served model** (`export_model.py::BEST_RANDOM_FOREST_PARAMS`, unchanged
 hyperparameters, refit on the new 13-column `FEATURE_COLUMNS`; `data/processed/model.joblib`
-re-exported) on the strength of this measured, leakage-checked, cross-model-family-confirmed win — no
+re-exported) on the strength of this measured, leakage-checked, cross-model-family-confirmed win, no
 wider hyperparameter re-tune was run first, since the gain is large enough on the existing params
 alone that waiting on one wasn't necessary to justify promoting (a possible future refinement, not a
-blocker). **This broke** `/predict/live` for about a day — accepted deliberately at the time, the same
+blocker). **This broke** `/predict/live` for about a day, accepted deliberately at the time, the same
 "dormant limitation" tradeoff already made for `cape`/`convective_precip_mm`, except this one was
 active immediately rather than dormant, since this is the feature set actually being promoted. Fixed
-2026-08-20 via a live FIRMS NRT feed — see
-[Serving](07-serving.md#live-weather-for-predictlive) for the full writeup.
+2026-08-20 via a live FIRMS NRT feed, see
+[Serving](07-serving.md#live-fire-detections-for-predictlive) for the full writeup.
 
 #### Re-verifying the rolling-origin backtest against the 13-feature model
 
 `evaluation/backtest.py` re-run 2026-08-20 against the promoted 13-feature (neighbor-fire-inclusive)
 model, using the identical 8-fold expanding-window protocol as the original [rolling-origin
-backtest](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset) — same holdout years,
+backtest](#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset), same holdout years,
 same `BEST_RANDOM_FOREST_PARAMS`, no re-tuning per fold, so this is a clean before/after on the one
 variable that changed (the feature set):
 
@@ -1234,36 +1251,36 @@ variable that changed (the feature set):
 
 **The two structurally-broken extreme years are fixed, not just improved.** 2021 and 2022 were the two
 folds [Why performance swings by month and year](#why-performance-swings-by-month-and-year) diagnosed as
-having a real, mechanistic problem beyond ordinary noise — a fixed top-10% ranking budget breaking down
+having a real, mechanistic problem beyond ordinary noise, a fixed top-10% ranking budget breaking down
 under extreme same-day fire counts, plus province-wide heat events compressing the *weather* signal
 itself so there was less cell-to-cell variation left to rank on. `neighbor_fire_count` sidesteps both
 mechanisms directly: it's not a weather feature that compresses under a heat dome, and it hands the model
 a second, independent axis (an actively-spreading nearby fire) to rank on when same-day weather alone
 stops discriminating. The result: 2022 goes from this backtest's *worst* year (8.2%) to comfortably
-mid-pack (75.5%), and 2021 — previously *underperforming* its own Jul/Aug-heavy month mix — becomes the
+mid-pack (75.5%), and 2021, previously *underperforming* its own Jul/Aug-heavy month mix, becomes the
 single best year in the new backtest (92.8%).
 
 **Cross-year instability itself is reduced but not eliminated.** New top-10% capture: mean **64.7%**,
-median **64.9%**, standard deviation **~23.8 percentage points** — against the old mean 30.8%/median
+median **64.9%**, standard deviation **~23.8 percentage points**, against the old mean 30.8%/median
 26.2%/~19pp. The absolute *floor* rose sharply (worst year 8.2% -> 29.1%) and the *center* roughly
 doubled, but the spread is still wide (29%-93%) and, in absolute percentage-point terms, slightly larger
-than before, not smaller — this feature raised performance across the board more than it equalized it.
+than before, not smaller, this feature raised performance across the board more than it equalized it.
 2017 is now the clear worst year, essentially unchanged from before (30.8% -> 29.1%): it's an outlier in
-the other direction — high fire count (1,433 positives, BC's 3rd-worst season in this dataset) without
+the other direction, high fire count (1,433 positives, BC's 3rd-worst season in this dataset) without
 2021's extreme same-day clustering, so neither weather compression nor budget saturation explains it as
 cleanly, and the reason it doesn't benefit from `neighbor_fire_count` the way 2021/2022 did is an open
 question this pass didn't chase further.
 
 **The month-of-season correlation weakened, consistent with the mechanism above.**
 `corr(jul_aug_fire_share, top_10pct_capture)` dropped from **r=0.63** (weather-only) to **r=0.44** (with
-neighbor-fire) across the same 8 folds — expected if part of what month-mix was previously a *proxy* for
+neighbor-fire) across the same 8 folds, expected if part of what month-mix was previously a *proxy* for
 (whether a year had enough nearby-fire density for the weather signal to still discriminate) is now
 captured more directly by `neighbor_fire_count` itself, leaving month-of-season explaining a smaller
 share of the remaining variance.
 
 **Practical takeaway, updated:** the "don't cite 71.9%/74.4% as typical" caution from the original
 backtest still applies in direction (real year-to-year spread remains large), but the *substance* of the
-caution has changed — the model's realistic worst-case floor is now closer to ~30% than ~8%, and its
+caution has changed, the model's realistic worst-case floor is now closer to ~30% than ~8%, and its
 typical (median) performance is now closer to the previously-best-observed years than to the previously-
 typical ones. Both are genuine, measured improvements from adding a same-week fire-precursor feature, not
 artifacts of retuning or a different evaluation protocol.
@@ -1271,32 +1288,33 @@ artifacts of retuning or a different evaluation protocol.
 ### 2. SHAP explainability
 
 The existing feature-importance work (MDI + permutation importance, see [Feature
-importance](#feature-importance-what-the-model-is-actually-leaning-on)) is entirely *global* — one
+importance](#feature-importance-what-the-model-is-actually-leaning-on)) is entirely *global*, one
 ranking across the whole val/test set. It can say "soil moisture matters most on average," not "why
-did this specific cell get flagged high-risk on this specific day." SHAP gives *local*,
-per-prediction, additive attributions (each feature's contribution sums exactly to that one
-prediction's score) — the natural complement to the existing analysis, not a replacement for it.
+did this specific cell get flagged high-risk on this specific day."
+[SHAP](glossary.md#shap-shapley-additive-explanations) gives *local*, per-prediction, additive
+attributions (each feature's contribution sums exactly to that one prediction's score), the natural
+complement to the existing analysis, not a replacement for it.
 
 **Scope: offline analysis first, a live endpoint is a separate, later decision.** A one-time analysis
 script (matching the existing `permutation_importance` runs' style) producing (a) a SHAP summary/
 beeswarm plot across the test set, cross-checked against the existing MDI/permutation top-5 ranking
 (`swvl1`, `t2m_mean_7d`, `precip_30d`, `t2m`, `rh_mean_7d`) as the same kind of "not an artifact"
 cross-method-agreement argument already made for MDI vs. permutation, extended to a third, independent
-method — and (b) waterfall plots for the real Aug 2021 dates already spot-checked elsewhere in this
+method, and (b) waterfall plots for the real Aug 2021 dates already spot-checked elsewhere in this
 project, e.g. "on 2021-08-04, soil moisture contributed +0.02, precip_30d +0.015 to this cell's
 flagged risk." A `/predict/explain` live endpoint is technically easy (`shap.TreeExplainer` is
-millisecond-fast per call for a RandomForest this size) but is new API surface with its own contract —
+millisecond-fast per call for a RandomForest this size) but is new API surface with its own contract,
 treat as a follow-up, not bundled into the same change.
 
 **Two real gotchas found in current** `shap` **docs, both must be handled explicitly, not assumed:**
 
 1. Binary-classifier output shape (a list of two arrays vs. a single array) is version/config-
-  dependent — must be verified empirically against the installed `shap` version at implementation
+  dependent, must be verified empirically against the installed `shap` version at implementation
    time.
 2. The default `TreeExplainer` explains the raw tree margin, not calibrated probability. Getting SHAP
   values that actually sum to `predict_proba`'s output requires `feature_perturbation="interventional"`,
    `model_output="probability"`, and a background sample. Even then, SHAP can only decompose the
-   pre-calibration `ignition_probability` — the attached isotonic
+   pre-calibration `ignition_probability`, the attached isotonic
    [calibrator](#does-pooled-leave-one-year-out-validated-calibration-actually-help) is a separate
    post-hoc regression on top of the raw score, not part of the tree structure, so there's no SHAP
    decomposition of `calibrated_probability`. State this plainly wherever the results get written up
@@ -1308,17 +1326,17 @@ script precedent). The live-endpoint stage is separate scope, not estimated here
 ### SHAP explainability: implemented (2026-08-19)
 
 `evaluation/shap_analysis.py` implements the offline stage of the proposal above, against the served
-model (13-column `FEATURE_COLUMNS` including `neighbor_fire_count_{1,3,7}d`, promoted the same day —
+model (13-column `FEATURE_COLUMNS` including `neighbor_fire_count_{1,3,7}d`, promoted the same day,
 see the previous section). Both gotchas were handled exactly as planned, not assumed:
 
 1. **Output shape, verified against the installed** `shap==0.52.0`**:** `TreeExplainer(...)` called on a
-  `DataFrame` returns a single `(n_samples, n_features, n_classes)` array — not the "list of two
+  `DataFrame` returns a single `(n_samples, n_features, n_classes)` array, not the "list of two
    arrays" shape some other shap versions/configs use. `_positive_class_explanation` asserts this
    shape and raises loudly rather than silently misreading which slice is the positive class if a
    future shap upgrade changes it again.
 2. **Additivity to** `predict_proba`**, checked by reconstruction, not assumed:** `explain()` sums each
   row's SHAP values plus its base value and asserts the result matches `model.predict_proba`'s raw
-   output to `1e-4`, for every call — a broken reconstruction would mean the attributions don't
+   output to `1e-4`, for every call, a broken reconstruction would mean the attributions don't
    actually explain what they claim to. As documented up front, everything below is in raw
    `ignition_probability` units; there is no SHAP decomposition of the isotonic-calibrated
    `calibrated_probability`, since the calibrator is a separate post-hoc regression bolted on after
@@ -1346,35 +1364,35 @@ different-looking story:
 | `neighbor_fire_count_1d` | 0.0006      |
 
 This is a real, non-contradictory disagreement between two honest measures, not a sign either one is
-wrong — checked directly, not just reasoned about: `neighbor_fire_count_7d` is exactly 0 for 98.6% of
+wrong, checked directly, not just reasoned about: `neighbor_fire_count_7d` is exactly 0 for 98.6% of
 test rows (239,096 / 242,424), and its mean |SHAP| on that subset is **exactly 0.000000**, vs.
 **0.474** on the 1.4% of rows where it's nonzero. MDI reflects how decisive a feature is *when the
 tree actually splits on it*; mean |SHAP| over a random population instead gets diluted by the huge
 majority of rows where a near-always-zero feature contributes nothing at all. **Both are true at
 once:** `neighbor_fire_count` is by far the single most decisive feature on the small share of
-cell-days where a fire is actually spreading nearby, and irrelevant — weather genuinely is what's left
-to differentiate on — everywhere else. The existing MDI-vs-permutation cross-check (two methods
+cell-days where a fire is actually spreading nearby, and irrelevant, weather genuinely is what's left
+to differentiate on, everywhere else. The existing MDI-vs-permutation cross-check (two methods
 agreeing is stronger evidence than one) doesn't directly transfer here, since SHAP and MDI are
 answering subtly different questions ("decisiveness when used" vs. "population-average contribution")
-for a feature this heavily zero-inflated — worth naming explicitly rather than picking whichever
+for a feature this heavily zero-inflated, worth naming explicitly rather than picking whichever
 ranking looks more convenient.
 
 **Three real per-prediction waterfalls, picked from actual test-set rows** (a random sample, plus
 every one of the test set's 242 real fires, so genuine caught/missed examples were guaranteed to
-exist rather than left to chance — an earlier run of this same script against a purely random
+exist rather than left to chance, an earlier run of this same script against a purely random
 3,000-row sample happened to contain zero fires at all):
 
 - **A caught fire** (cell `1119_-1711`, 2024-07-20, `ignition_probability=0.997`): `neighbor_fire_count_7d`
-(+0.517), `_3d` (+0.161), `_1d` (+0.060) are the top three contributors by a wide margin — this
+(+0.517), `_3d` (+0.161), `_1d` (+0.060) are the top three contributors by a wide margin, this
 fire was flagged almost entirely because it had 11 neighbor ignitions in the trailing week.
 - **The highest-scored non-fire** (cell `1122_-1713`, 2024-08-06, `ignition_probability=0.995`): the
-same shape — `neighbor_fire_count_7d` (+0.595), `_3d` (+0.147), `_1d` (+0.072) dominate. This cell
+same shape, `neighbor_fire_count_7d` (+0.595), `_3d` (+0.147), `_1d` (+0.072) dominate. This cell
 sat in the middle of an active nearby cluster and, by the model's own reasoning, looked exactly like
-the fires around it — a legible, defensible false positive, not an inexplicable one.
+the fires around it, a legible, defensible false positive, not an inexplicable one.
 - **A real missed fire** (cell `1141_-1693`, 2024-07-22, `ignition_probability=0.275`, below the
 test set's own top-10% cutoff): **no** `neighbor_fire_count` **feature appears anywhere in its top-6
 contributions at all.** The drivers are entirely weather (`swvl1` +0.082, `t2m` +0.066,
-`t2m_mean_7d` +0.060, `wind_speed` -0.039, `relative_humidity` +0.016, `rh_mean_7d` +0.009) — a
+`t2m_mean_7d` +0.060, `wind_speed` -0.039, `relative_humidity` +0.016, `rh_mean_7d` +0.009), a
 concrete, individual confirmation of the mechanism proposed when spatial-lag features were first
 motivated above: a fire with no nearby recent precursor gets scored on weather alone, the same
 ceiling every purely-weather-driven prediction already had before this feature existed.
@@ -1383,7 +1401,7 @@ Plots (`shap_beeswarm.png` and the three `shap_waterfall_*.png` files above) wer
 `data/processed/` (gitignored build output, same as `model.joblib`) rather than committed or embedded
 in this markdown file, matching this project's existing prose-and-tables documentation style.
 
-**Wired into a live endpoint 2026-08-20:** `GET /predict/explain` — see
+**Wired into a live endpoint 2026-08-20:** `GET /predict/explain`, see
 [Serving](07-serving.md#explaining-a-live-prediction-predictexplain) for the full write-up (background-
 sample construction, response shape, and a live verification against a real active fire cluster).
 Originally scoped out of this pass as a separate follow-up; the live-forecasting work that fixed
@@ -1395,22 +1413,23 @@ unrelated session.
 `calibration.py`'s pooled isotonic/sigmoid work (validated via
 [leave-one-year-out calibration checking](#does-pooled-leave-one-year-out-validated-calibration-actually-help))
 already found calibration reliability itself swings 6-51x by year in sparse years (2019/2020/2022,
-even after pooling) — but that instability is invisible to an API consumer today: `/predict` just
+even after pooling), but that instability is invisible to an API consumer today: `/predict` just
 returns one float, no matter how thin the calibration-set support behind it actually is.
 
 **Technique, and why not MAPIE:** MAPIE's classification prediction-set approach (a marginal-coverage
 guarantee that the true label lands in a predicted set) is built for choosing among multiple discrete
-classes/actions — an awkward fit for "how much do I trust this one ignition probability." Venn-Abers
-(`pip install venn-abers`, MIT license, pure numpy/sklearn, no new heavy dependency) is the right tool
-instead: for each prediction it produces a calibrated point probability `p_prime` *plus* an interval
-`[p0, p1]` bracketing it — a direct, per-row, machine-readable version of the exact caveat the
+classes/actions, an awkward fit for "how much do I trust this one ignition probability."
+[Venn-Abers](glossary.md#venn-abers) (`pip install venn-abers`, MIT license, pure numpy/sklearn, no
+new heavy dependency) is the right tool instead: for each prediction it produces a calibrated point
+probability `p_prime` *plus* an interval
+`[p0, p1]` bracketing it, a direct, per-row, machine-readable version of the exact caveat the
 year-dependent calibration finding already established, rather than a new claim.
 
-**Temporal safety — checked against the actual library source, not the README.** The high-level
+**Temporal safety, checked against the actual library source, not the README.** The high-level
 `VennAbersCalibrator` wrapper does its own random `cal_size` split internally, which would quietly
 reintroduce the random-split leakage this project's [temporal-split
 discipline](#splitting-by-time-never-randomly) exists to prevent. The low-level `VennAbers` class
-doesn't — `va.fit(p_cal, y_cal)` takes pre-computed calibration-set probabilities/labels directly,
+doesn't, `va.fit(p_cal, y_cal)` takes pre-computed calibration-set probabilities/labels directly,
 then `va.predict_proba(p_test)` returns `(p_prime, [p0, p1])`, the same signature shape as this
 project's existing `fit_isotonic_calibrator(y_score, y_true)`. Use the low-level class only; the
 wrapper is not safe to use as-is.
@@ -1423,14 +1442,14 @@ and mean interval width. **The real test:** do intervals actually widen honestly
 too?
 
 **Negative result, defined up front:** if interval width doesn't track the already-documented
-sparse-year unreliability, it isn't adding real signal over the existing static caveat — don't ship
+sparse-year unreliability, it isn't adding real signal over the existing static caveat, don't ship
 it, held to the same standard the reverted calendar/proximity features were.
 
 **Effort/risk:** low for validation (~half a day, one new light dependency, reuses the existing
-backtest infrastructure entirely). Higher for shipping (a new `ModelBundle`/API field) — gate that on
+backtest infrastructure entirely). Higher for shipping (a new `ModelBundle`/API field), gate that on
 the LOYO check actually confirming value first.
 
-**Result, run 2026-08-20: negative — not shipped.** `evaluation/calibration.py`'s LOYO check extended
+**Result, run 2026-08-20: negative, not shipped.** `evaluation/calibration.py`'s LOYO check extended
 with the low-level `venn_abers.VennAbers` class (`fit_venn_abers_calibrator`/
 `apply_venn_abers_calibrator`), fit on the same 8 rolling-origin folds the isotonic/sigmoid columns
 already use:
@@ -1446,55 +1465,57 @@ already use:
 | 2023 | 802       | 0.002713             | 0.825                        | 0.000037              |
 | 2024 | 242       | 0.000798             | 1.179                        | 0.000023              |
 
-`venn_abers`'s Brier/top-bin-ratio columns track isotonic's almost exactly (expected — both are
+`venn_abers`'s Brier/top-bin-ratio columns track isotonic's almost exactly (expected, both are
 monotonic score-to-frequency mappings fit on the same pooled data), so the point-probability half of
 Venn-Abers adds nothing new here. **The real test was the interval width, and it fails cleanly:**
-`corr(mean_interval_width, 1/positives)` across the 8 folds is **-0.36** — weakly *negative*, the
+`corr(mean_interval_width, 1/positives)` across the 8 folds is **-0.36**, weakly *negative*, the
 opposite sign the "widens honestly on sparse years" hypothesis needs. Bucketed the way the proposal
 specified: known-sparse years (2019/2020/2022) have a *smaller* mean interval width (0.000015) than the
-other five years (0.001039) — backwards from the prediction. The entire "other years" number is one
+other five years (0.001039), backwards from the prediction. The entire "other years" number is one
 outlier: 2021 alone is 0.004938, roughly 30-400x every other year's width, while 2019/2020/2022 (the
 years actually flagged unreliable by the isotonic/sigmoid top-bin-ratio columns) have the *narrowest*
-intervals in the whole table. Interval width here is tracking something else — most plausibly 2021's own
+intervals in the whole table. Interval width here is tracking something else, most plausibly 2021's own
 extreme raw scores (its top-bin mean predicted is 0.79, far above every other year) and/or its unusually
 small calibration pool (2,904 pooled positives, the smallest of the 8 folds, since 2021 itself
-contributes more positives than the other seven years combined) — not "how reliable is this year's
+contributes more positives than the other seven years combined), not "how reliable is this year's
 calibration" in the sense the sparse-year finding actually means.
 
 **Per the negative-result criterion defined up front: don't ship.** No `ModelBundle`/API changes were
-made — `fit_venn_abers_calibrator`/`apply_venn_abers_calibrator` and the extended LOYO check stay in
+made, `fit_venn_abers_calibrator`/`apply_venn_abers_calibrator` and the extended LOYO check stay in
 `evaluation/calibration.py` as validated, reusable tooling (and a real, useful cross-check that
 isotonic's point estimate isn't leaving anything on the table), not as a served uncertainty field. If a
 future feature or dataset change makes prediction-set-style uncertainty worth revisiting, this exact
-check can be re-run cheaply — it's already wired into the LOYO rig, not a one-off script.
+check can be re-run cheaply, it's already wired into the LOYO rig, not a one-off script.
 
 ### 4. Attention-pooling on the sequence model (a narrower angle than a full Transformer)
 
 See [Testing the sequence-modeling hypothesis](#testing-the-sequence-modeling-hypothesis) and
-`[research/neural-networks.md](../research/neural-networks.md)` for the full context: that experiment
+[`research/neural-networks.md`](../research/neural-networks.md) for the full context: that experiment
 already ran and RandomForest won clearly (test PR-AUC 0.0106 vs. the CNN's 0.0062, top-10% capture
 71.9% vs. 68.6%), and this project has *twice* documented that more model capacity backfires on this
 data (the CNN result, plus an earlier uncapped-depth RandomForest diagnostic that cratered top-10%
 capture to 26.4%). A full multi-head self-attention/Transformer block would add capacity in exactly
-the setting already shown to punish that — not recommended.
+the setting already shown to punish that, not recommended.
 
 **Narrower proposal instead:** keep `SequenceCNN`'s `conv1`/`conv2` unchanged, replace
 `AdaptiveAvgPool1d(1)` with one `nn.Linear(hidden_channels*2, 1)` scoring each day + a softmax-weighted
-sum. This adds roughly 66 parameters — not "more capacity," so it tests a genuinely different,
+sum. This adds roughly 66 parameters, not "more capacity," so it tests a genuinely different,
 still-open question the original experiment didn't: does *learning which days to weight* beat uniform
 averaging, independent of the already-closed raw-sequence-vs-rolling-features question.
 
 **Interpretability artifact:** for ~8-10 real test-set fires (a mix of catches and misses), plot
-attention weight against day-in-window (1-30) — plus a table of mean attention-by-lag-day across all
+attention weight against day-in-window (1-30), plus a table of mean attention-by-lag-day across all
 test positives, checking whether the model concentrates near the ignition day or spreads out evenly
-(evenly ≈ learned to reproduce plain averaging, a negative result). Reuses the exact same `temporal_ split`/`score_sequence_model` harness — only the pooling layer changes, isolating one variable.
+(evenly ≈ learned to reproduce plain averaging, a negative result). Reuses the exact same
+`temporal_split`/`score_sequence_model` harness, only the pooling layer changes, isolating one
+variable.
 
 **Honest framing:** pitched as a cheap (~30-60 min implementation, GPU makes training near-instant),
-low-risk experiment worth running for the interpretability artifact and research completeness — not
+low-risk experiment worth running for the interpretability artifact and research completeness, not
 as a likely path to beating RandomForest, given this project is 2-for-2 against "more capacity helps"
 so far.
 
-**Result, run 2026-08-20: negative, as expected — and now 3-for-3 against "more capacity/complexity
+**Result, run 2026-08-20: negative, as expected, and now 3-for-3 against "more capacity/complexity
 helps."** `AttentionPoolSequenceCNN` trained via the identical `fit_sequence_cnn` harness (same rows,
 same epochs, same optimizer) as `SequenceCNN`, on the same fire-season 2012-2022 train / 2023 val / 2024
 test split as [Testing the sequence-modeling hypothesis](#testing-the-sequence-modeling-hypothesis):
@@ -1505,26 +1526,26 @@ test split as [Testing the sequence-modeling hypothesis](#testing-the-sequence-m
 | SequenceCNN (avg-pool)   | 0.0114     | 39.0%       | 0.0084       | 68.6%        |
 | AttentionPoolSequenceCNN | 0.0091     | 34.4%       | 0.0049       | 65.3%        |
 
-Attention-pooling didn't just fail to beat RandomForest (expected) — it also underperformed plain
+Attention-pooling didn't just fail to beat RandomForest (expected), it also underperformed plain
 `SequenceCNN` averaging on every metric, on both splits. Learning which days to weight, with only ~66
 extra parameters, still made this architecture strictly worse at this task, not neutral.
 
 **The interpretability artifact explains why, and it isn't quite the "uniform" negative result
 predicted up front.** Mean attention weight by lag-day, pooled across all 242 real test-set fires,
 doesn't spread evenly (uniform would be 3.3% per day) and doesn't concentrate on the ignition day either
-(day 0's mean weight: 0.01%, far *below* uniform) — instead it puts a large, oddly specific 23.3% of its
+(day 0's mean weight: 0.01%, far *below* uniform), instead it puts a large, oddly specific 23.3% of its
 attention mass on day-2-before-target alone, with smaller secondary bumps around days 26-27-before and a
 mild elevated plateau around days 10-14-before. That's a third outcome, worse than either alternative
 the proposal considered: not "spreads out because there's nothing to learn" and not "learns the sensible
 thing," but *learns a specific, non-uniform pattern that doesn't correspond to the most information-
-relevant day* — a mild overfitting-to-noise signature consistent with why its scores came in below plain
+relevant day*, a mild overfitting-to-noise signature consistent with why its scores came in below plain
 averaging's. Plot saved to `data/processed/attention_weights_by_fire.png` (gitignored build output,
 matching this project's plot-saving convention); caught (top-10%) and missed fires' curves both show
 this same day-2 spike shape, not a caught-vs-missed difference worth a separate finding.
 
 **Conclusion, matching the honest framing set up front:** this remains a cheap, low-risk experiment that
 paid off as research completeness and interpretability, not as a path to a better model.
-`SequenceCNN`/`AttentionPoolSequenceCNN` stay diagnostic-only scripts, same as before this experiment —
+`SequenceCNN`/`AttentionPoolSequenceCNN` stay diagnostic-only scripts, same as before this experiment,
 nothing here changes `export_model.py` or what's served.
 
 ## Closing the feature-category gap: FWI, terrain, and fuel type (2026-08-21)
@@ -1533,29 +1554,29 @@ A competitive-landscape review of other wildfire-ML systems (the Canadian FWI Sy
 Next Day Wildfire Spread benchmark, CanadaFireSat, a 2020-2025 systematic review of 341 ML wildfire
 studies) surfaced one structural gap ahead of any modeling refinement: FireSight was a **weather-only**
 model. Fuel/vegetation state is the single largest input category reported across that literature
-(44.7% of all reported ML wildfire model inputs — ahead of climate/weather), and terrain (elevation,
+(44.7% of all reported ML wildfire model inputs, ahead of climate/weather), and terrain (elevation,
 slope, aspect) is foundational to the Canadian FBP System itself; FireSight had zero features in either
 category. Three additions closed that gap, each implemented and validated independently before being
 combined into one measured benchmark:
 
-**1. Canadian FWI System (`features/fwi.py`).** FFMC/DMC/DC/ISI/BUI/FWI — the actual fire-danger rating
-BC Wildfire Service runs operationally — computed via the Van Wagner (1985/1987) recursive equations
+**1. Canadian FWI System (`features/fwi.py`).** FFMC/DMC/DC/ISI/BUI/FWI, the actual fire-danger rating
+BC Wildfire Service runs operationally, computed via the Van Wagner (1985/1987) recursive equations
 from data already in the pipeline (temp/RH/wind/precip), not a new data source. The six formulas were
 transcribed from the official NRCan-maintained reference implementation (`cffdrs/cffdrs_r`'s individual
 component R files, not a secondary description of them) and checked against that package's own
-`tests/testthat/data/*.csv` fixtures — 33 reference-value tests in `tests/test_fwi.py`, every one an
+`tests/testthat/data/*.csv` fixtures, 33 reference-value tests in `tests/test_fwi.py`, every one an
 exact match, not a "looks plausible" translation. **A deliberate simplification, not an oversight:**
 with no snow-cover data, there's no real per-station spring-melt date to reset FFMC/DMC/DC from, so the
-recursion resets to standard start-up values (85/6/15) on a fixed March 1 each year instead — days
+recursion resets to standard start-up values (85/6/15) on a fixed March 1 each year instead, days
 before a record's first reset are left `NaN` (dropped by `drop_incomplete_history`, the same "don't
 guess, drop it" precedent `days_since_rain` already established) rather than running the raw recursion
 through a snow-covered winter, which would misread snow-water-equivalent as duff-wetting rain.
 
 **2. Terrain (`features/topography.py`).** Elevation from Open-Meteo's Elevation API (Copernicus DEM
-2021, 90m) — the same provider `live_weather.py` already depends on, and a point-query API rather than
+2021, 90m), the same provider `live_weather.py` already depends on, and a point-query API rather than
 a DEM download, so no new GDAL/rasterio dependency (`features/grid.py`'s docstring already states that
 tradeoff for this project). Slope and aspect are derived via Horn's method (Horn 1981, the same formula
-ESRI's Slope/Aspect tools implement) from each cell's 8 Moore-neighbor elevations — appropriate at this
+ESRI's Slope/Aspect tools implement) from each cell's 8 Moore-neighbor elevations, appropriate at this
 project's 5km resolution, where elevation is already a coarse per-cell value. Aspect is encoded as
 sin/cos of a compass bearing, the same circular-encoding precedent `add_wind_features` already set;
 `tests/test_topography.py` includes two physically-derived checks (a synthetic east-rising elevation
@@ -1564,23 +1585,23 @@ checking the code runs.
 
 **3. Fuel type (`features/fuel_type.py`).** BC's Provincial Fuel Type Layer
 (`WHSE_LAND_AND_NATURAL_RESOURCE.PROT_FUEL_TYPE_SP`) is the FBP-classification layer (C-1..C-7, D-1/2,
-M-1..M-4, S-1..S-3, O-1a/b, N, W) BC Wildfire Service's own Prometheus fire-growth simulator consumes —
+M-1..M-4, S-1..S-3, O-1a/b, N, W) BC Wildfire Service's own Prometheus fire-growth simulator consumes,
 but it's served as individual forest-stand polygons (>400,000 intersect the Kamloops FC bbox alone; the
 province-wide download is a ~4GB File Geodatabase needing GDAL to read), not a small pre-clipped file, so
 this queries the WFS endpoint directly per grid-cell centroid with a small bounding box instead of
 downloading it. One real, checked-against-the-live-service correction along the way: `FUEL_TYPE_CD`
 often carries a burn-history prefix (`B71_S-2`) that would have multiplied the effective class count far
-past the ~16 base FBP types — `FT_PROMETHEUS`, the same layer's own pre-cleaned base code, is what's
+past the ~16 base FBP types, `FT_PROMETHEUS`, the same layer's own pre-cleaned base code, is what's
 actually kept. One-hot encoded per code *actually present* in the Kamloops FC extract (19 codes, not a
 fixed 16-class province-wide schema), several of them thin (`C-4`: 2 cells; several `M-1/M-2 (NN PC)`
-variants: 1-2 cells each) — a real limitation of a small-region MVP that a province-wide scale-up would
-mostly resolve.
+variants: 1-2 cells each), a real limitation of working at Kamloops' small regional scale, noted here
+rather than treated as a reason to expand.
 
-### Result: measured, mixed-to-negative — not promoted
+### Result: measured, mixed-to-negative, not promoted
 
 All 29 new columns (6 FWI + 4 terrain + 19 fuel type) added to the training set at once and benchmarked
-against the current 13-feature served model, same `BEST_RANDOM_FOREST_PARAMS`, same train/val/test split
-— matching the exact methodology `cape`/`convective_precip_mm` was evaluated with above:
+against the current 13-feature served model, same `BEST_RANDOM_FOREST_PARAMS`, same train/val/test split,
+matching the exact methodology `cape`/`convective_precip_mm` was evaluated with above:
 
 | model                                     | val PR-AUC | val top-10% | test PR-AUC | test top-10% |
 | ------------------------------------------ | ---------- | ----------- | ------------ | ------------ |
@@ -1588,31 +1609,31 @@ against the current 13-feature served model, same `BEST_RANDOM_FOREST_PARAMS`, s
 | 42 features (+ FWI + terrain + fuel type)  | 0.3562     | 90.6%        | 0.3172        | 86.4%        |
 
 Mixed, and on the metric that matters most (test PR-AUC, the untouched 2024 year), meaningfully worse
-(-15% relative) — not a clean win the way `neighbor_fire_count` was, and not a clean no-op either. MDI
+(-15% relative), not a clean win the way `neighbor_fire_count` was, and not a clean no-op either. MDI
 feature importance on the 42-feature model shows the new features aren't dead weight sitting unused:
 `bui` (2.0%), `dmc` (1.8%), `elevation_m` (1.5%), `aspect_sin` (1.4%), and `fwi` (1.4%) each individually
-outrank several existing weather features (`t2m_mean_7d` 0.3%, `wind_speed` 0.2%, `precip_30d` 0.2%) —
-the model does lean on them — but that didn't translate into better held-out generalization.
+outrank several existing weather features (`t2m_mean_7d` 0.3%, `wind_speed` 0.2%, `precip_30d` 0.2%),
+the model does lean on them, but that didn't translate into better held-out generalization.
 
 **Two real, undecided confounds, named rather than papered over:** (1) `BEST_RANDOM_FOREST_PARAMS`'
-`max_features=0.6063` is a *fraction* of the column count — at 13 columns that's ~8 candidate features
+`max_features=0.6063` is a *fraction* of the column count, at 13 columns that's ~8 candidate features
 per split, at 42 columns it's ~25, a substantially different effective regularization the params were
 never tuned for, so this result can't cleanly separate "these features don't help" from "these
 hyperparameters are stale for a 3x wider column set." (2) The fuel-type one-hot columns are genuinely
 thin at this region's scale (several under 3 cells), diluting signal-to-noise in a way a province-wide
-extent likely wouldn't. Neither confound was chased further this pass — matching the same standard the
+extent likely wouldn't. Neither confound was chased further this pass, matching the same standard the
 `cape`/`convective_precip_mm` result was held to (a single measured comparison under unchanged
 hyperparameters is enough to decide *don't ship yet*, not enough to definitively rule the features out
 forever).
 
 **Decision at this point: not promoted.** `training/baseline.py::FEATURE_COLUMNS` and `export_model.py`'s
-served model stayed **unchanged** (still the 13-feature set) pending the follow-up check named above —
+served model stayed **unchanged** (still the 13-feature set) pending the follow-up check named above,
 see below for how that check actually turned out.
 
 ### Per-group ablation: isolating which of the three actually helps
 
-The natural next check named above — re-tuned `max_features`, or isolating FWI from terrain from fuel
-type rather than testing all three at once — was run the same day. Each group was added to the 13-feature
+The natural next check named above, re-tuned `max_features`, or isolating FWI from terrain from fuel
+type rather than testing all three at once, was run the same day. Each group was added to the 13-feature
 base individually, same `BEST_RANDOM_FOREST_PARAMS`, same train/val/test split:
 
 | model                     | n features | val PR-AUC | test PR-AUC | test top-10% |
@@ -1623,33 +1644,33 @@ base individually, same `BEST_RANDOM_FOREST_PARAMS`, same train/val/test split:
 | **base + fuel type**        | **32**     | **0.3632** | **0.3816**   | **88.0%**    |
 | base + all three            | 42         | 0.3562     | 0.3172       | 86.4%        |
 
-FWI and terrain are each essentially neutral alone — neither helps nor hurts test PR-AUC by more than
+FWI and terrain are each essentially neutral alone, neither helps nor hurts test PR-AUC by more than
 noise. **Fuel type alone is a real, clean win**: +2.4% relative test PR-AUC, +2pp top-10% capture, with
 no hyperparameter changes. The all-three row reproduces the original combined result almost exactly
-(test PR-AUC 0.3172, matching the table above), confirming it's real and not a fluke — but the per-group
+(test PR-AUC 0.3172, matching the table above), confirming it's real and not a fluke, but the per-group
 breakdown shows the regression isn't caused by any single group being bad; it's fuel type's real signal
 getting drowned out by combining it with two groups that add columns without adding value.
 
 **Confound (1) resolved: `max_features` wasn't stale.** A sweep from 0.15 to 1.0 against the 32-column
-base+fuel-type model (other params fixed) is unimodal, peaking right around the existing 0.6063 —
+base+fuel-type model (other params fixed) is unimodal, peaking right around the existing 0.6063,
 val PR-AUC there (0.3632) is the highest of the sweep, and test PR-AUC (0.3816) is within noise of the
 peak (0.4523 edges it slightly on test, 0.3843 vs 0.3816, but loses on val, the metric this project
 selects on). The 13-column-tuned fraction already generalizes fine to 32 columns; the earlier
 42-feature regression was never a stale-hyperparameter artifact.
 
-**Confound (2) — thin one-hot classes — no longer a blocker**, since the group carrying them
+**Confound (2), thin one-hot classes, no longer a blocker**, since the group carrying them
 (fuel type alone) is the one that measurably helps despite it; a province-wide extent would likely
 still improve on this further, but it isn't gating today's result.
 
 **Decision: fuel type promoted, FWI and terrain are not.** `training/baseline.py::FEATURE_COLUMNS` now
 includes the 19 `fuel_type_*` columns (32 features total), re-exported with the same
-`BEST_RANDOM_FOREST_PARAMS` — no retune needed, since the sweep above showed the existing value is
+`BEST_RANDOM_FOREST_PARAMS`, no retune needed, since the sweep above showed the existing value is
 already near-optimal. FWI and terrain stay in `kamloops_dataset.parquet` and their fetch/cache modules
 (`features/fwi.py`/`topography.py`, still cached under `data/raw/`) as validated-but-not-promoted
-groundwork, the same status `cape`/`convective_precip_mm` already has — genuinely tested, not dead
+groundwork, the same status `cape`/`convective_precip_mm` already has, genuinely tested, not dead
 code, just not currently earning their place in the served model. `/predict/live`/`/predict/explain`
-needed a new fuel-type source to keep working once the served model actually depends on it — see
-[Serving](07-serving.md#live-weather-for-predictlive) for `features/live_fuel_type.py`, a cache lookup
+needed a new fuel-type source to keep working once the served model actually depends on it, see
+[Serving](07-serving.md#fuel-type-for-predictlive) for `features/live_fuel_type.py`, a cache lookup
 rather than a third live-data fetch, since fuel type doesn't change day to day.
 
 ## Testing the multi-day-ahead label (2026-08-21)
@@ -1660,16 +1681,17 @@ days?" This is the first real attempt at it. See [Grid &
 labels](03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21) for how
 `ignited_next_3d` is actually built (a forward rolling-max over `ignited`, `n_days=3`) and why the
 temporal split's boundaries don't need special trimming for it given this project's existing
-fire-season scope — this section is the modeling result on top of that label.
+fire-season scope, this section is the modeling result on top of that label.
 
 **Positive rate rises, but less than proportionally to the window width.** Filtered to fire season,
 the 3-day-ahead label's positive rate is ~1.7x the same-day rate on every split (test: 0.0998% ->
-0.1741%), not ~3x — real fires cluster over consecutive days (the same event still burning, or a
+0.1741%), not ~3x, real fires cluster over consecutive days (the same event still burning, or a
 FIRMS detection lagging ignition by a day), so widening the window catches fewer *additional* distinct
 events than a naive 3x would suggest.
 
 **First pass: the served model's exact hyperparameters, unretuned, on the new label.** Same
-`FEATURE_COLUMNS` (the current 13, unchanged — fuel type wasn't re-added to this experiment), same
+`FEATURE_COLUMNS` (the current 32, unchanged, fuel type included, the same set
+`export_multi_day_model` fits against), same
 `BEST_RANDOM_FOREST_PARAMS`, same temporal split, only the label column swapped:
 
 | model | val PR-AUC | test PR-AUC | test top-10% |
@@ -1679,13 +1701,13 @@ events than a naive 3x would suggest.
 | dummy (3-day-ahead) | 0.0054 | 0.0017 | 15.9% |
 
 Clears the dummy floor by a wide margin (test PR-AUC ~166x the dummy's), confirming real skill on the
-wider target — but a genuine, expected gap versus the same-day model on the metric that matters most
+wider target, but a genuine, expected gap versus the same-day model on the metric that matters most
 (test PR-AUC down ~24% relative). This isn't a bug or a confound to chase: the 3-day-ahead model is
 solving a strictly harder problem (any ignition in a 3-day window, not one exact day) from the exact
-same information (day *D*'s conditions only — no weather forecast for *D+1*/*D+2* exists in this
+same information (day *D*'s conditions only, no weather forecast for *D+1*/*D+2* exists in this
 pipeline), so some accuracy loss relative to the easier same-day target is exactly what should happen.
 
-**Retune attempt: made val better and test worse — discarded.** A 15-candidate manual random search
+**Retune attempt: made val better and test worse, discarded.** A 15-candidate manual random search
 (same `n_jobs=-1`-hang-avoiding manual-loop pattern the `max_features` sweep above used, generalized
 to `n_estimators`/`max_depth`/`min_samples_leaf`/`max_features` via a fixed-seed random sample) picked
 the val-PR-AUC winner:
@@ -1695,20 +1717,20 @@ the val-PR-AUC winner:
 | 3-day-ahead, unretuned | 0.3520 | **0.2906** | **80.8%** |
 | 3-day-ahead, retuned (`n_estimators=499, max_depth=8, min_samples_leaf=7, max_features=0.7553`) | **0.3593** | 0.2704 | 79.1% |
 
-The retuned config wins on val but loses on test — the same single-fold-overfitting shape this project
+The retuned config wins on val but loses on test, the same single-fold-overfitting shape this project
 has hit before (the 2026-08-12 RandomForest-vs-XGBoost episode, [Widening the
 search](#widening-the-search-randomizedsearchcv--predefinedsplit)), and resolved the same way: trust
 test over a close val call, since val is one year and more exposed to overfitting its own fold. The
-unretuned, same-day-tuned params are the better choice for this label — this project's existing
+unretuned, same-day-tuned params are the better choice for this label, this project's existing
 hyperparameters already generalize reasonably well to a differently-shaped target, so a dedicated
 retune wasn't actually needed here, and searching harder made things worse, not better.
 
 **Decision: served, as a second parallel model.** Unlike FWI/terrain above (neutral-to-negative on the
 *same* target, genuinely not worth serving), this result is a real, working capability with an honest
-accuracy gap on a *harder* target — worth shipping with the gap documented, not worth hiding behind
+accuracy gap on a *harder* target, worth shipping with the gap documented, not worth hiding behind
 "not promoted." `training/export_model.py::export_multi_day_model` exports a second `ModelBundle`
 (`data/processed/model_3day.joblib`, same `FEATURE_COLUMNS`/`BEST_RANDOM_FOREST_PARAMS`, no calibrator
-yet — see that function's docstring for why) and `api/main.py` serves it at
+yet, see that function's docstring for why) and `api/main.py` serves it at
 `GET /predict/live/multi-day`, reusing the exact same live weather/neighbor-fire/fuel-type sourcing
 `/predict/live` already has. See [Serving](07-serving.md#predictlivemulti-day-the-3-day-ahead-endpoint)
 for the endpoint itself.

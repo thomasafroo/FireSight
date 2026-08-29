@@ -27,7 +27,7 @@ def test_predict_calibrated_proba_returns_none_without_a_calibrator():
 
 
 def test_predict_calibrated_proba_applies_the_attached_calibrator():
-    # Raw scores are a known 10x overconfident scaling of the true rate — the calibrator should
+    # Raw scores are a known 10x overconfident scaling of the true rate, the calibrator should
     # recover something close to true_rate, not the raw score.
     raw_scores = np.linspace(0.0, 1.0, 200)
     true_rate = raw_scores / 10

@@ -2,7 +2,7 @@
 
 Panel-data feature engineering: every function here groups by `cell_id`
 before computing anything, since a rolling window or "days since X" is
-only meaningful within one cell's own history — see
+only meaningful within one cell's own history, see
 docs/05-feature-engineering.md for the full reasoning.
 
 Callers must run these against a frame sorted by (cell_id, date); every
@@ -36,16 +36,16 @@ ENGINEERED_COLUMNS = [
     "neighbor_fire_count_7d",
     # cape/convective_precip_mm arrive already-complete daily values straight from
     # features/convective.py's join (no per-cell rolling computation needed here, unlike the
-    # features above) — listed so drop_incomplete_history still enforces completeness on them.
+    # features above), listed so drop_incomplete_history still enforces completeness on them.
     "cape",
     "convective_precip_mm",
     # ffmc/dmc/dc/isi/bui/fwi (Canadian Forest Fire Weather Index System, features/fwi.py) arrive
     # already-complete from pipeline/build_dataset.py's separate compute_fwi call (recursive
     # day-over-day, needs grid_cells for latitude -- doesn't fit engineer_features' plain
     # per-cell-group signature, same reason cape/convective_precip_mm are joined outside it too).
-    # Legitimately NaN before each year's March 1 reset (see fwi.py's module docstring) --
-    # listed here so drop_incomplete_history drops those rows the same way it already drops
-    # rolling-window warm-up rows, not because it's an error.
+    # Legitimately NaN before the record's *first* March 1 reset (the dataset's first Jan/Feb only,
+    # not every year's -- see fwi.py's module docstring) -- listed here so drop_incomplete_history
+    # drops those rows the same way it already drops rolling-window warm-up rows, not as an error.
     "ffmc",
     "dmc",
     "dc",
@@ -77,7 +77,7 @@ def add_relative_humidity(
 
     ERA5-Land gives dewpoint, not RH directly. RH = 100 * e(Td) / e(T), where
     e(x) = exp(17.625*x / (243.04+x)) is the Magnus-Tetens saturation vapor
-    pressure approximation (x in Celsius) — standard meteorological formula,
+    pressure approximation (x in Celsius), standard meteorological formula,
     accurate to within ~0.4% over typical terrestrial temperature ranges.
     """
     df = df.copy()
@@ -98,7 +98,7 @@ def add_wind_features(
 
     Direction is circular (0deg and 359deg are neighbors, not opposite), so a
     single raw bearing column would be a bad numeric feature for any model
-    that assumes distance is linear — see docs/05-feature-engineering.md.
+    that assumes distance is linear, see docs/05-feature-engineering.md.
     cos(bearing) and sin(bearing) are just the normalized (u, v) components,
     so no trig call is needed: cos(atan2(v, u)) == u / speed by definition.
     """
@@ -119,14 +119,16 @@ def add_days_since_rain(
     threshold: float = RAIN_THRESHOLD_MM,
     out_col: str = "days_since_rain",
 ) -> pd.DataFrame:
-    """Count of days since precip last exceeded `threshold`, per cell.
+    """Count of days since precip last reached `threshold`, per cell.
 
-    NaN for rows before a cell's first recorded wet day (there's no "last
-    rain" to count from yet) — a real absence of information, not something
-    to paper over with 0. Vectorized via groupby + ffill rather than a
-    per-row Python loop: each row's position-in-group is carried forward
-    from the last wet row's position, then subtracted from the current
-    position.
+    The test is `>=`, so a day at exactly `RAIN_THRESHOLD_MM` counts as wet,
+    and a wet day itself scores 0, not 1. NaN for rows before a cell's first
+    recorded wet day (there's no "last rain" to count from yet), a real
+    absence of information, not something to paper over with 0.
+
+    Vectorized via groupby + ffill rather than a per-row Python loop: each
+    row's position-in-group is carried forward from the last wet row's
+    position, then subtracted from the current position.
     """
     df = _sorted(df, cell_col, date_col)
     pos = df.groupby(cell_col).cumcount()
@@ -146,12 +148,15 @@ def add_rolling_features(
     rh_col: str = "relative_humidity",
     windows: tuple[int, ...] = ROLLING_WINDOWS_DAYS,
 ) -> pd.DataFrame:
-    """Rolling precip sums/temp means (drought + heat buildup) and a temp trend.
+    """Rolling precip sums, 7-day temp/humidity means (drought + heat buildup), and a temp trend.
 
-    Requires `relative_humidity` to already exist (run add_relative_humidity
-    first). NaN for the first `window - 1` rows of each cell's history,
-    where there isn't yet a full window to summarize — see
-    drop_incomplete_history below.
+    `windows` controls the precip sums only; `t2m_mean_7d`, `rh_mean_7d` and
+    `t2m_trend_7d` are fixed at 7 days. Requires `relative_humidity` to
+    already exist (run add_relative_humidity first). NaN for the first
+    `window - 1` rows of each cell's history, where there isn't yet a full
+    window to summarize, see drop_incomplete_history below. `t2m_trend_7d`
+    is the exception: it's a plain `shift(7)` difference rather than a
+    rolling window, so it's NaN for the first 7 rows, not 6.
     """
     df = _sorted(df, cell_col, date_col)
     grouped = df.groupby(cell_col)
@@ -171,7 +176,7 @@ def _moore_neighbor_adjacency(cell_ids: pd.Index) -> np.ndarray:
     """Build a (cell x cell) 0/1 adjacency matrix from `cell_id`'s "{row}_{col}" scheme.
 
     `features/grid.py::assign_cell_ids`/`build_grid_cells` both derive cell_id this way, so a
-    cell's 8 Moore neighbors are plain integer offsets on the parsed row/col — no spatial index
+    cell's 8 Moore neighbors are plain integer offsets on the parsed row/col, no spatial index
     needed for a regular grid.
     """
     row_col = [tuple(int(v) for v in cid.split("_", 1)) for cid in cell_ids]
@@ -200,13 +205,13 @@ def add_neighbor_fire_features(
     Strictly prior-day only: the whole (date x cell) ignition panel is shifted forward one day
     *before* any rolling sum, so a window ending "today" only ever sums neighbor status through
     yesterday. This matters because one real wildfire spanning several grid cells gets detected
-    on the same FIRMS day across all of them — including same-day neighbor status would leak the
+    on the same FIRMS day across all of them, including same-day neighbor status would leak the
     very thing being predicted, the same leakage risk `add_days_since_rain`/`add_rolling_features`
-    avoid by construction (see docs/06-modeling-and-evaluation.md#1-spatial-lag-features-neighbor-
-    cells-recent-fire-history).
+    avoid by construction (see
+    docs/06-modeling-and-evaluation.md#1-spatial-lag-features-neighbor-cells-recent-fire-history).
 
-    Requires a dense (every cell x every date) panel — true of the label scaffold this runs
-    against in `pipeline/build_dataset.py`, before any row gets dropped for other reasons — so
+    Requires a dense (every cell x every date) panel, true of the label scaffold this runs
+    against in `pipeline/build_dataset.py`, before any row gets dropped for other reasons, so
     the date-indexed pivot below has no missing (cell, date) combinations to paper over.
     """
     df = _sorted(df, cell_col, date_col)

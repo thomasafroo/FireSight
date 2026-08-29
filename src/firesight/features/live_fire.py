@@ -9,14 +9,14 @@ uses for training. Two things verified live against the real API before writing 
 1. NRT shares the same `MAP_KEY`, endpoint shape, and 5-day-per-request limit as the `_SP` archive,
    so `ingest_firms.py::fetch_window` is reused unchanged, just chunked to cover a >5-day lookback.
 2. NRT VIIRS CSVs do **not** carry a `type` column (confirmed against a real live request on
-   2026-08-20) — the `_SP` archive's `type==0` vegetation-fire filter (`labels.py::filter_real_fires`)
+   2026-08-20), the `_SP` archive's `type==0` vegetation-fire filter (`labels.py::filter_real_fires`)
    can't be applied here, so every detection is treated as a wildfire candidate. Historically ~0.5%
-   of this bbox's `_SP` detections were type 2/3 (static source/offshore, see `labels.py`) — a small,
+   of this bbox's `_SP` detections were type 2/3 (static source/offshore, see `labels.py`), a small,
    accepted overcount, not a correctness gap worth blocking on.
 
 `VIIRS_NOAA20_NRT`, not `VIIRS_SNPP_NRT`: Suomi NPP (SNPP) data delivery ends 2026-11-01 (per NASA
 Earthdata), so building against it now would need re-pointing within weeks. Same VIIRS instrument
-family as training's `VIIRS_SNPP_SP`, a different satellite platform — a real, accepted train/live
+family as training's `VIIRS_SNPP_SP`, a different satellite platform, a real, accepted train/live
 source mismatch, not a bug.
 """
 
@@ -72,14 +72,14 @@ def build_live_neighbor_fire_features(
 
     Reproduces `engineering.py::add_neighbor_fire_features`'s exact semantics for one cell instead of
     the whole training panel: for each window, the count of (neighbor, day) pairs where a neighbor
-    had >=1 detection on a day strictly before `target_date` and within the trailing `window` days —
+    had >=1 detection on a day strictly before `target_date` and within the trailing `window` days,
     summed across all up to 8 Moore neighbors. A neighbor that ignited on multiple separate days in
     the window contributes more than 1, matching the training feature's rolling-sum-then-adjacency-
     matrix-multiply construction rather than a simplified "did any neighbor ignite" flag.
     """
     neighbors = set(neighbor_cell_ids(cell_id))
     max_window = max(windows)
-    # Strictly prior days only [target_date - max_window, target_date - 1] — same leakage guard as
+    # Strictly prior days only [target_date - max_window, target_date - 1], same leakage guard as
     # training's `prior = pivot.shift(1)` before any rolling sum.
     lookback_end = target_date - dt.timedelta(days=1)
 

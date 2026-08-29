@@ -1,121 +1,83 @@
+<div align="center">
+
 # FireSight
 
-Geospatial machine learning for wildfire risk forecasting in British Columbia.
+### Geospatial machine learning for wildfire risk forecasting in the Kamloops Fire Centre, BC
+
+</div>
 
 Predicts the probability that a grid cell in BC will experience a wildfire ignition on a given day,
-using historical fire and weather data. Built as an end-to-end system — data pipeline, model
-training with rigorous temporal validation, and an inference API — not just a notebook. (Predicting
+using historical fire and weather data. Built as an end-to-end system, data pipeline, model
+training with rigorous temporal validation, and an inference API, not just a notebook. (Predicting
 same-day ignition is what's actually implemented; extending the label to a multi-day-ahead window is
-a natural future step, not yet built — see
+a natural future step, not yet built, see
 [Problem framing](docs/01-problem-framing.md#what-were-actually-predicting).)
+
+## Motivation
+
+I took CPSC 330 at UBC (shoutout to Professor Giulia Toti), which covered the fundamentals of
+supervised and unsupervised machine learning and gave me practical, hands-on experience with
+`scikit-learn`. This past summer, I wanted to build on that with a focused project of my own rather
+than another course assignment.
+
+The summer 2026 wildfire season in Canada, especially in BC, was severe, ravaging ecosystems and
+communities. As a Vancouverite, I felt it directly: most of the smoke settling over the city was
+coming from the direction of the regions around Kamloops, and the drop in air quality was impossible
+to ignore. That raised an obvious question: could machine learning forecast which regions of BC are
+at immediate risk of wildfire? FireSight is the project I built to try to answer it.
+
+I originally planned to cover all of BC. I quickly ran into two practical limits: a province-wide
+dataset takes a lot more time to train on, and some of the models I wanted to try are constrained by
+my own computer's memory. Narrowing the scope to the Kamloops Fire Centre, the source of much of the
+smoke I'd been breathing, kept the project small enough to actually finish and iterate on.
 
 ## Status
 
-The Kamloops Fire Centre MVP is done — the original 10-step plan works end-to-end and has been
-verified live, not just unit-tested:
+FireSight is complete and working end to end: raw data, a trained model, a live API, and an
+interactive map, tested not just with unit tests but by checking its predictions against real
+historical wildfires.
 
-- **Data pipeline:** raw FIRMS + ERA5-Land -> grid/label/weather/feature pipeline -> processed
-  dataset -> temporal train/val/test split (never random, see [Design notes](#design-notes)).
-- **Modeling:** Dummy and LogisticRegression baselines, then tuned RandomForest/XGBoost, widened
-  further with a `RandomizedSearchCV`+`PredefinedSplit` search. RandomForest is the model currently
-  being served.
-- **Serving:** the served model swaps with a one-line change and zero edits to `api/main.py`,
-  confirmed by actually swapping it live and re-checking `/health` and `/risk-map`. `/predict/live`
-  scores a grid cell's current conditions via a live weather feed (Open-Meteo), rather than only
-  replaying historical dates. Every prediction endpoint also returns a calibrated probability
-  (`calibrated_probability`/`calibrated_risk_probability`) alongside the raw, relative-ranking-only
-  `ignition_probability`/`risk_probability` — an isotonic calibrator fit on scores pooled across all 8
-  of `evaluation/backtest.py`'s rolling-origin years, the same methodology validated by the
-  leave-one-year-out check below. See
-  [Serving](docs/07-serving.md#calibration-ignition_probability-vs-calibrated_probability).
-- **Frontend:** a minimal Leaflet map replaying historical risk against real recorded outcomes.
+- **Data pipeline:** combines NASA FIRMS fire detections with ECMWF ERA5-Land weather data into a
+  labeled grid of 5km cells across the Kamloops Fire Centre, split by date (not randomly) into
+  training, validation, and test sets.
+- **Modeling:** compared a dummy baseline, logistic regression, random forest, XGBoost, and a neural
+  network; a tuned random forest performs best and is the model currently served.
+- **Serving:** a FastAPI backend that scores risk for any cell and date, including live conditions
+  fetched in real time rather than only replaying history.
+- **Frontend:** a Leaflet map for browsing historical risk against what actually happened, and
+  checking live risk for any cell.
 
-Full reasoning and current results: `docs/README.md`.
+**Scope:** permanently the Kamloops Fire Centre, not all of BC, and fire season only
+(May 1 - Oct 15, any year).
 
-**Scoped to fire season:** training and evaluation are restricted to May 1 - Oct 15 (any year),
-matching the Kamloops Fire Centre's typical open-burning prohibition window. This follows from a
-winter/shoulder-season blind spot found during error analysis — the served model missed nearly all
-winter fires (0/23 in December on the 2024 test set) because they're more often human-caused than
-weather-driven, and every feature here is weather-derived. Two feature-engineering attempts to fix it
-failed, so rather than keep chasing it, the project now excludes those months from the problem
-entirely and focuses on the summer fire-weather signal the model actually has. See [Modeling &
-evaluation](docs/06-modeling-and-evaluation.md#scoping-to-fire-season).
+**Known limitation:** the model is better at ranking which cells are riskiest relative to each other
+than at giving a precise probability on its own, and overall accuracy varies noticeably from year to
+year rather than holding at one number. See
+[Modeling & evaluation](docs/06-modeling-and-evaluation.md) for the full results.
 
-**Decided:** staying scoped to the Kamloops Fire Centre rather than scaling to all of BC. A larger
-bbox means a much bigger grid, more raw FIRMS/ERA5-Land volume, and a per-row reference-latitude
-approximation in `features/grid.py` that would need correcting — deliberately kept out of scope for
-this project rather than backed into. See [Future directions](docs/08-future-directions.md) for what
-that expansion would actually require (including whether Kamloops' one-model approach even makes sense
-across BC's different fire-climate regions) and the project's other open/deferred questions.
-
-**Fuel type added to the served model, FWI and terrain tried but not promoted.** A competitive-
-landscape review found FireSight was weather-only, missing the single largest input category
-reported across published wildfire-ML studies (fuel/vegetation state). All three were added and
-benchmarked together first (mixed-to-negative), then re-tested individually — fuel type (BC's
-Provincial Fuel Type Layer, one-hot per FBP class) is a clean, real win on its own; the Canadian FWI
-System and terrain (elevation/slope/aspect) are each neutral alone and were actively diluting fuel
-type's signal when combined. Only fuel type is in the served model now. See [Modeling &
-evaluation](docs/06-modeling-and-evaluation.md#closing-the-feature-category-gap-fwi-terrain-and-fuel-type-2026-08-21).
-
-**Multi-day-ahead prediction added: `GET /predict/live/multi-day`, also in the map UI.** A second,
-independently-exported model scores `ignited_next_3d` (a real fire anywhere in the next 3 days, not
-just today) using the exact same features and hyperparameters as the same-day model. It clears the
-dummy floor by a wide margin, but carries a genuine ~24% relative test PR-AUC gap versus same-day
-prediction — expected for a harder target using the same information, not a bug — and has no
-calibrated probability yet (a real, documented gap, not an oversight). A hyperparameter retune made it
-worse, not better (a val-only overfit), so the original same-day-tuned params were kept. The frontend's
-cell popup has a "today" / "next 3 days" toggle next to its live-risk button, so this isn't just a raw
-API endpoint — it's clickable on the map. See [Grid &
-labels](docs/03-grid-and-labels.md#the-multi-day-ahead-label-ignited_next_nd-2026-08-21), [Modeling &
-evaluation](docs/06-modeling-and-evaluation.md#testing-the-multi-day-ahead-label-2026-08-21), and
-[Serving](docs/07-serving.md#predictlivemulti-day-the-3-day-ahead-endpoint).
-
-**Known limitation:** `ignition_probability` (from `/predict` and `/predict/live`) is a reliable
-*relative* risk ranking but not a calibrated probability — a cell scored ~85% actually ignites about
-1.4% of the time. This is an expected side effect of `class_weight="balanced"` in training, not a
-bug. Worse, the size of that miscalibration isn't even stable year to year (a rolling-origin check
-found the gap between predicted and observed risk swinging from ~17x to ~490x depending on the
-holdout year), so there's no single correction factor to apply directly to `ignition_probability`
-itself; see
-[Modeling & evaluation](docs/06-modeling-and-evaluation.md#calibration-is-ignition_probability-a-real-probability).
-A separate, pooled-across-years calibrator is now served alongside it (see the Status section above)
-rather than replacing it — ranking still relies on the raw score.
-
-**Known limitation:** the model's headline top-10%-capture number (71.9%, from the original single
-val/test split) is close to the best year out of eight backtested — a rolling-origin backtest across
-2017-2024 found a mean of 30.8%, a median of 26.2%, and a range of 8.2%-74.4%, all on the exact same
-tuned model. Cite the range or the median, not 71.9%, when describing expected real-world performance;
-see [Modeling & evaluation](docs/06-modeling-and-evaluation.md#rolling-origin-backtest-is-719-typical-or-the-best-year-in-the-dataset).
-Most of that swing tracks which months a year's fires happen to land in (r=0.63 with Jul/Aug fire
-share); the residual is concentrated in BC's two most extreme fire seasons (2017, 2021) specifically,
-where a fixed annual top-10% ranking budget breaks down on days with 100+ simultaneous ignitions and
-province-wide extreme heat compresses the cell-to-cell weather variation the model ranks on — see [Why
-performance swings by month and
-year](docs/06-modeling-and-evaluation.md#why-performance-swings-by-month-and-year).
-
-**Neural network: tried, didn't win.** `research/neural-networks.md`'s one open hypothesis — a raw
-daily weather sequence capturing temporal shape the hand-engineered rolling windows flatten away —
-was tested for real in `training/sequence_model.py`: a small 1D-CNN benchmarked against the tuned
-RandomForest on identical rows. The RandomForest won on every metric but a near-tied test ROC-AUC,
-most clearly on PR-AUC and top-10%-capture. No change to the served model; see [Modeling &
-evaluation](docs/06-modeling-and-evaluation.md#testing-the-sequence-modeling-hypothesis) for the full
-numbers.
+Full reasoning and open questions live in `docs/README.md`, in particular
+[Future directions](docs/08-future-directions.md).
 
 ## Project layout
 
 ```
 src/firesight/
-  pipeline/     data ingestion (FIRMS fire points, ERA5-Land weather)
-                + build_dataset.py (assembles the full processed table)
-  features/     grid construction, labels, weather join, feature engineering
+  pipeline/     data ingestion (FIRMS fire points, ERA5-Land weather,
+                full-ERA5 convective variables) + build_dataset.py
+                (assembles the full processed table)
+  features/     grid construction, labels, weather join, feature engineering,
+                FWI/terrain/fuel type, plus live_*.py rebuilding the same
+                feature row from live sources for /predict/live
   training/     model training (baseline -> boosted trees -> NN) + persistence
-  evaluation/   metrics suited to rare-event classification
+  evaluation/   rare-event metrics, rolling-origin backtest, calibration, SHAP
 api/            FastAPI inference/demo endpoints wrapping the trained model
 frontend/       minimal Leaflet risk map (static, no build step)
 data/           raw/ and processed/ data (gitignored, not committed)
 notebooks/      exploration only, not the deliverable
-docs/           ML guide — concepts, definitions, and the reasoning
+docs/           ML guide, concepts, definitions, and the reasoning
                 behind each pipeline/modeling decision (start at docs/README.md)
+research/       standalone feasibility writeups for approaches evaluated
+                but not shipped (lightning data, neural networks)
 tests/          unit tests for pipeline/features/training/api, one file per module
 ```
 
@@ -136,8 +98,9 @@ https://cds.climate.copernicus.eu/profile
      url: https://cds.climate.copernicus.eu/api
      key: YOUR_PERSONAL_ACCESS_TOKEN
      ```
-  3. Accept the ERA5-Land dataset's terms on its CDS page before your first request — the API
-rejects requests until you do.
+  3. Accept the ERA5-Land dataset's terms on its CDS page before your first request, the API
+rejects requests until you do. `ingest_era5_convective.py` pulls a *different* CDS dataset
+(`reanalysis-era5-single-levels`), whose terms have to be accepted separately on its own page.
   4. `uv add cdsapi` (not installed by default, since it needs the account set up first)
 
 ## Running
@@ -146,14 +109,16 @@ rejects requests until you do.
 uv run pytest
 uv run python -m firesight.pipeline.ingest_firms
 uv run python -m firesight.pipeline.ingest_era5
-uv run python -m firesight.pipeline.build_dataset       # raw data -> data/processed/kamloops_dataset.parquet
-uv run python -m firesight.training.baseline            # Dummy + LogisticRegression vs the temporal val split
-uv run python -m firesight.training.advanced_models      # RandomForest + XGBoost, tuned against the same split
-uv run python -m firesight.training.export_model         # persists the current-best model -> data/processed/model.joblib
-uv run uvicorn api.main:app --reload                      # serves it on :8000
+uv run python -m firesight.pipeline.ingest_era5_convective  # full-ERA5 CAPE + convective precip
+uv run python -m firesight.pipeline.build_dataset           # raw data -> data/processed/kamloops_dataset.parquet
+uv run python -m firesight.training.baseline                # Dummy + LogisticRegression vs the temporal val split
+uv run python -m firesight.training.advanced_models         # RandomForest + XGBoost, tuned against the same split
+uv run python -m firesight.training.export_model            # persists model.joblib (same-day) + model_3day.joblib
+uv run uvicorn api.main:app --reload                        # serves it on :8000
 # then open frontend/index.html in a browser
 # GET /predict/live?cell_id=<id>&date=YYYY-MM-DD scores current conditions (needs internet access to
 # reach Open-Meteo; no API key or account needed, unlike the ERA5-Land backfill above)
+# GET /predict/live/multi-day?cell_id=<id>&date=YYYY-MM-DD scores the next 3 days instead
 ```
 
 ## Design notes

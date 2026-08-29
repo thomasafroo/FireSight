@@ -1,9 +1,9 @@
 """Join daily CAPE / convective-precipitation onto a (cell, date) table.
 
-Sibling to `weather.py`'s ERA5-Land join — reuses its `nearest_era5_lookup`/`join_weather` as-is,
+Sibling to `weather.py`'s ERA5-Land join, reuses its `nearest_era5_lookup`/`join_weather` as-is,
 since both already operate generically on any (latitude, longitude, date, ...)-shaped frame. What's
 different here is *loading*: full ERA5 is on a coarser ~0.25 degree grid than ERA5-Land's ~0.1
-degree grid, and (verified directly against a real CDS response, not assumed — see
+degree grid, and (verified directly against a real CDS response, not assumed, see
 pipeline/ingest_era5_convective.py) `cp` (convective precipitation) is NOT a running accumulation
 since 00 UTC the way ERA5-Land's `tp` is: each hourly sample is its own independent, already-
 deaccumulated value, so the daily total here is a plain sum of that day's 24 hourly values, not the

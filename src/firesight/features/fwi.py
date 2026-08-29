@@ -1,14 +1,14 @@
-"""Canadian Forest Fire Weather Index (FWI) System — FFMC, DMC, DC, ISI, BUI, FWI.
+"""Canadian Forest Fire Weather Index (FWI) System, FFMC, DMC, DC, ISI, BUI, FWI.
 
 This is the fire-danger rating BC Wildfire Service (and every other Canadian fire agency) actually
 runs operationally, not one this project invented. Six components, each a recursive day-over-day
 fuel-moisture code (except ISI/BUI/FWI, which are same-day combinations of the other three):
 
-- **FFMC** (Fine Fuel Moisture Code): moisture in surface litter — reacts fast (hours-to-a-day
+- **FFMC** (Fine Fuel Moisture Code): moisture in surface litter, reacts fast (hours-to-a-day
   memory). Drives ignition ease and fire spread rate.
-- **DMC** (Duff Moisture Code): moisture in loosely-compacted organic layers a few cm down —
+- **DMC** (Duff Moisture Code): moisture in loosely-compacted organic layers a few cm down,
   weeks of memory.
-- **DC** (Drought Code): moisture in deep, compact organic layers — months of memory, the
+- **DC** (Drought Code): moisture in deep, compact organic layers, months of memory, the
   System's proxy for seasonal drought.
 - **ISI** (Initial Spread Index): FFMC + wind, combined into an expected spread-rate index.
 - **BUI** (Buildup Index): DMC + DC, combined into a fuel-consumption index.
@@ -16,27 +16,34 @@ fuel-moisture code (except ISI/BUI/FWI, which are same-day combinations of the o
 
 Formulas transcribed from the official NRCan-maintained reference implementation
 (`cffdrs/cffdrs_r`, `R/fine_fuel_moisture_code.r`, `R/duff_moisture_code.r`, `R/drought_code.r`,
-`R/initial_spread_index.r`, `R/buildup_index.r`, `R/fire_weather_index.r` — equation numbers below
+`R/initial_spread_index.r`, `R/buildup_index.r`, `R/fire_weather_index.r`, equation numbers below
 refer to Van Wagner & Pickett 1985, "Equations and FORTRAN program for the Canadian Forest Fire
-Weather Index System", Forestry Technical Report 33), not re-derived from a textbook description —
+Weather Index System", Forestry Technical Report 33), not re-derived from a textbook description,
 translation checked against that package's own `tests/testthat/data/*.csv` reference fixtures (see
 `tests/test_fwi.py`), not just "looks plausible."
 
 **Units, matching this project's existing raw columns, not CFFDRS's own convention:** temperature in
 Celsius (this module converts from `t2m`'s Kelvin), wind speed in km/h (`wind_speed` is m/s from
-ERA5's `u10`/`v10`, converted here — CFFDRS's own wind-effect formulas are calibrated to km/h and
+ERA5's `u10`/`v10`, converted here, CFFDRS's own wind-effect formulas are calibrated to km/h and
 silently give the wrong magnitude if handed m/s directly), relative humidity 0-100, precipitation
 in mm (already the case for this project's `precip_mm`, no conversion needed).
 
 **Deliberate simplification: no snow-cover data, so no real spring start-up date.** CFFDRS resets
-FFMC/DMC/DC to standard start-up values (85/6/15) each year once snow has melted at a given station —
+FFMC/DMC/DC to standard start-up values (85/6/15) each year once snow has melted at a given station,
 `RESET_MONTH_DAY` below (March 1) is a fixed calendar-date stand-in for that, chosen to give ~2
-months of DMC/DC buildup before FIRE_SEASON_START (May 1), not a station-verified melt date. Every
-day before that year's first reset (e.g. Jan/Feb of the dataset's first year) has no valid prior-day
-state to recurse from and is left `NaN` rather than guessed — the same "don't paper over missing
-history" precedent `engineering.py::add_days_since_rain` already set. Running the raw recursion
-through a snow-covered BC winter would misread snow-water-equivalent as duff-wetting rain and is not
-attempted.
+months of DMC/DC buildup before FIRE_SEASON_START (May 1), not a station-verified melt date.
+
+Only the days before the **record's first** reset (Jan/Feb of the dataset's first year) are left
+`NaN`: there's no prior-day state to recurse from yet, and inventing one would be guessing, the same
+"don't paper over missing history" precedent `engineering.py::add_days_since_rain` already set.
+Every *later* year's Jan/Feb is computed normally, by carrying the previous December's state
+forward, so the NaN warm-up happens once for the whole record, not once per year.
+
+That does mean the recursion runs straight through snow-covered BC winters, where it misreads
+snow-water-equivalent as duff-wetting rain. Those values are never relied on: each March 1 reset
+overwrites the carried-over state before it can reach a fire season, and `filter_fire_season`
+(training/baseline.py) drops the winter rows themselves, so no Nov-Feb value reaches a model. What's
+out of scope here is a *real* over-winter carry-over, not the arithmetic running unattended.
 """
 
 from __future__ import annotations
@@ -53,7 +60,7 @@ RESET_MONTH_DAY = "03-01"
 
 FWI_COLUMNS = ["ffmc", "dmc", "dc", "isi", "bui", "fwi"]
 
-# DMC day-length adjustment (Le), by month (Jan..Dec) — Van Wagner 1987, Table.
+# DMC day-length adjustment (Le), by month (Jan..Dec), Van Wagner 1987, Table.
 _DMC_ELL_46N = np.array([6.5, 7.5, 9.0, 12.8, 13.9, 13.9, 12.4, 10.9, 9.4, 8.0, 7.0, 6.0])  # lat > 30
 _DMC_ELL_20N = np.array([7.9, 8.4, 8.9, 9.5, 9.9, 10.2, 10.1, 9.7, 9.1, 8.6, 8.1, 7.8])  # 10 < lat <= 30
 _DMC_ELL_20S = np.array([10.1, 9.6, 9.1, 8.5, 8.1, 7.8, 7.9, 8.3, 8.9, 9.4, 9.9, 10.2])  # -30 < lat <= -10
@@ -88,20 +95,20 @@ def next_ffmc(ffmc_prev: np.ndarray, temp_c: np.ndarray, rh: np.ndarray, wind_km
     """One day's FFMC update (Eqs. 1-10). All array args must already be same-shaped/broadcastable.
 
     Sub-expressions below are computed for every element regardless of which branch a given cell
-    actually falls in (`np.where`'s both arguments are always evaluated) — safe by construction
+    actually falls in (`np.where`'s both arguments are always evaluated), safe by construction
     since `np.where` only ever returns values from the selected branch, but a branch computed on
     out-of-domain inputs for its *other* cells (e.g. `log`/`sqrt` of a value that only makes sense
     when it's raining) can raise a `RuntimeWarning`. `np.errstate` suppresses those; the discarded,
     possibly-NaN results from the unselected branch never reach the return value.
     """
     with np.errstate(invalid="ignore", divide="ignore"):
-        # Eq. 1 — yesterday's FFMC as moisture content.
+        # Eq. 1, yesterday's FFMC as moisture content.
         wmo = FFMC_COEFFICIENT * (101 - ffmc_prev) / (59.5 + ffmc_prev)
 
-        # Eq. 2 — rain reduced for canopy interception loss.
+        # Eq. 2, rain reduced for canopy interception loss.
         ra = np.where(precip_mm > 0.5, precip_mm - 0.5, precip_mm)
         ra_safe = np.where(ra > 0, ra, 1.0)  # guards Eqs. 3a/3b's exp(-6.93/ra) on non-rain rows
-        # Eqs. 3a, 3b — moisture after rain, two sub-formulas depending on how wet it already was.
+        # Eqs. 3a, 3b, moisture after rain, two sub-formulas depending on how wet it already was.
         rained_high = wmo + 0.0015 * (wmo - 150) ** 2 * np.sqrt(ra_safe) + 42.5 * ra_safe * np.exp(-100 / (251 - wmo)) * (
             1 - np.exp(-6.93 / ra_safe)
         )
@@ -109,37 +116,41 @@ def next_ffmc(ffmc_prev: np.ndarray, temp_c: np.ndarray, rh: np.ndarray, wind_km
         wmo = np.where(precip_mm > 0.5, np.where(wmo > 150, rained_high, rained_low), wmo)
         wmo = np.minimum(wmo, 250.0)  # real pine-litter moisture tops out around 250%
 
-        # Eqs. 4, 5 — equilibrium moisture content from drying / from wetting.
+        # Eqs. 4, 5, equilibrium moisture content for drying (Ed) and for wetting (Ew).
         ed = 0.942 * rh**0.679 + 11 * np.exp((rh - 100) / 10) + 0.18 * (21.1 - temp_c) * (1 - 1 / np.exp(rh * 0.115))
         ew = 0.618 * rh**0.753 + 10 * np.exp((rh - 100) / 10) + 0.18 * (21.1 - temp_c) * (1 - 1 / np.exp(rh * 0.115))
 
-        drying = (wmo < ed) & (wmo < ew)
-        wetting = wmo > ed
+        # Which direction today moves yesterday's moisture. Below both equilibria the litter takes
+        # moisture *up* from the air (wetting, toward Ew); above the drying equilibrium it gives
+        # moisture *off* (drying, toward Ed). Mutually exclusive by construction, and a cell sitting
+        # between Ew and Ed is neither: its moisture carries over unchanged.
+        wetting = (wmo < ed) & (wmo < ew)
+        drying = wmo > ed
 
-        # Eqs. 6a/6b — log drying rate, temperature-adjusted.
-        z_dry = np.where(
-            drying,
+        # Eqs. 7a/7b, log wetting rate, temperature-adjusted.
+        z_wet = np.where(
+            wetting,
             0.424 * (1 - ((100 - rh) / 100) ** 1.7) + 0.0694 * np.sqrt(wind_kmh) * (1 - ((100 - rh) / 100) ** 8),
             0.0,
         )
-        x_dry = z_dry * 0.581 * np.exp(0.0365 * temp_c)
-        # Eq. 9
-        wm_dry = ew - (ew - wmo) / (10**x_dry)
-
-        # Eqs. 7a/7b — log wetting rate, temperature-adjusted (default/else carries z_dry forward,
-        # matching the R source's sequential-overwrite semantics — harmless since drying/wetting
-        # are mutually exclusive by construction).
-        z_wet = np.where(
-            wetting,
-            0.424 * (1 - (rh / 100) ** 1.7) + 0.0694 * np.sqrt(wind_kmh) * (1 - (rh / 100) ** 8),
-            z_dry,
-        )
         x_wet = z_wet * 0.581 * np.exp(0.0365 * temp_c)
-        # Eq. 8
-        wm_wet = ed + (wmo - ed) / (10**x_wet)
+        # Eq. 9, moisture after wetting, rising toward Ew.
+        wm_wet = ew - (ew - wmo) / (10**x_wet)
 
-        wm = np.where(drying, wm_dry, wmo)
-        wm = np.where(wetting, wm_wet, wm)
+        # Eqs. 6a/6b, log drying rate, temperature-adjusted (the default/else branch carries z_wet
+        # forward, matching the R source's sequential-overwrite semantics, harmless since wetting
+        # and drying are mutually exclusive).
+        z_dry = np.where(
+            drying,
+            0.424 * (1 - (rh / 100) ** 1.7) + 0.0694 * np.sqrt(wind_kmh) * (1 - (rh / 100) ** 8),
+            z_wet,
+        )
+        x_dry = z_dry * 0.581 * np.exp(0.0365 * temp_c)
+        # Eq. 8, moisture after drying, falling toward Ed.
+        wm_dry = ed + (wmo - ed) / (10**x_dry)
+
+        wm = np.where(wetting, wm_wet, wmo)
+        wm = np.where(drying, wm_dry, wm)
 
         # Eq. 10
         ffmc = 59.5 * (250 - wm) / (FFMC_COEFFICIENT + wm)
@@ -150,25 +161,25 @@ def next_dmc(dmc_prev: np.ndarray, temp_c: np.ndarray, rh: np.ndarray, precip_mm
     """One day's DMC update (Eqs. 11-16)."""
     temp_c = np.maximum(temp_c, -1.1)
     le = _dmc_day_length(latitude, month)
-    # Eq. 16 — log drying rate.
+    # Eq. 16, log drying rate.
     rk = 1.894 * (temp_c + 1.1) * (100 - rh) * le * 1e-4
 
     with np.errstate(invalid="ignore", divide="ignore"):
         dmc_safe = np.where(dmc_prev > 0, dmc_prev, 1.0)  # guards the log(dmc_prev) branches below
-        # Eq. 11 — net rain.
+        # Eq. 11, net rain.
         rw = 0.92 * precip_mm - 1.27
-        # Eq. 12 (as amended in the reference implementation) — moisture content before rain.
+        # Eq. 12 (as amended in the reference implementation), moisture content before rain.
         wmi = 20 + 280 / np.exp(0.023 * dmc_prev)
-        # Eqs. 13a-13c — a slope term, piecewise in dmc_prev.
+        # Eqs. 13a-13c, a slope term, piecewise in dmc_prev.
         b = np.select(
             [dmc_prev <= 33, dmc_prev <= 65],
             [100 / (0.5 + 0.3 * dmc_prev), 14 - 1.3 * np.log(dmc_safe)],
             default=6.2 * np.log(dmc_safe) - 17.2,
         )
-        # Eq. 14 — moisture content after rain.
+        # Eq. 14, moisture content after rain.
         wmr = wmi + 1000 * rw / (48.77 + b * rw)
         wmr_safe = np.where(wmr > 20, wmr - 20, 1.0)  # guards the log below when rain barely mattered
-        # Eq. 15 (amended) — P after rain.
+        # Eq. 15 (amended), P after rain.
         pr_wet = 43.43 * (5.6348 - np.log(wmr_safe))
 
     # Rain of 1.5mm or less doesn't reach the duff layer; DMC carries over unchanged.
@@ -181,15 +192,15 @@ def next_dc(dc_prev: np.ndarray, temp_c: np.ndarray, precip_mm: np.ndarray, lati
     """One day's DC update (Eqs. 18-23)."""
     temp_c = np.maximum(temp_c, -2.8)
     lf = _dc_day_length_factor(latitude, month)
-    # Eq. 22 — potential evapotranspiration, floored at 0 (no negative winter values).
+    # Eq. 22, potential evapotranspiration, floored at 0 (no negative winter values).
     pe = np.maximum((0.36 * (temp_c + 2.8) + lf) / 2, 0.0)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        # Eq. 18 — effective rainfall.
+        # Eq. 18, effective rainfall.
         rw = 0.83 * precip_mm - 1.27
-        # Eq. 19 — moisture equivalent of yesterday's DC.
+        # Eq. 19, moisture equivalent of yesterday's DC.
         smi = 800 * np.exp(-dc_prev / 400)
-        # Eq. 21 (amended) — DC after rain.
+        # Eq. 21 (amended), DC after rain.
         dr0 = np.maximum(dc_prev - 400 * np.log1p(3.937 * rw / smi), 0.0)
 
     # Rain of 2.8mm or less doesn't reach this deep; DC carries over unchanged.
@@ -243,7 +254,7 @@ def compute_fwi(
     """Add `ffmc`/`dmc`/`dc`/`isi`/`bui`/`fwi` columns via the recursive daily System.
 
     Requires a dense (every cell x every date) panel, same as
-    `engineering.py::add_neighbor_fire_features` — true of the label scaffold this runs against in
+    `engineering.py::add_neighbor_fire_features`, true of the label scaffold this runs against in
     `pipeline/build_dataset.py`. `grid_cells` supplies each cell's latitude (for DMC/DC's day-length
     tables) via `features/grid.py::build_grid_cells`.
 

@@ -26,14 +26,15 @@ load_dotenv()
 FIRMS_BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 MAX_DAY_RANGE = 5  # hard limit enforced by the API
 
-# west,south,east,north — start with a small bounding box (Kamloops Fire Centre)
-# rather than all of BC, to keep the first pipeline run fast.
+# west,south,east,north. Scoped permanently to the Kamloops Fire Centre rather than all of BC
+# (see README.md's "Scope"), not a staging step toward a province-wide grid: a province-wide
+# dataset is both much slower to train on and larger than this machine's memory comfortably holds.
 BC_KAMLOOPS_BBOX = "-121.5,49.8,-119.0,51.5"
 
-# _SP (Standard Processing) sources are the quality-assured, complete archive —
+# _SP (Standard Processing) sources are the quality-assured, complete archive,
 # use these for historical training data. _NRT sources are for near-real-time
 # use later (the live risk map), not backfill.
-# MODIS_SP goes back to ~2000, VIIRS_SNPP_SP to ~2012 — confirm exact coverage
+# MODIS_SP goes back to ~2000, VIIRS_SNPP_SP to ~2012, confirm exact coverage
 # via https://firms.modaps.eosdis.nasa.gov/api/data_availability/ once you
 # have a MAP_KEY.
 DEFAULT_SOURCE = "VIIRS_SNPP_SP"
@@ -67,7 +68,7 @@ def fetch_window(
 ) -> pd.DataFrame:
     """Fetch a single window (max 5 days) of fire detections for a bounding box.
 
-    Retries on any request failure, including HTTP 400 — observed FIRMS
+    Retries on any request failure, including HTTP 400, observed FIRMS
     returning a spurious 400 for a request that succeeded moments later on
     retry, so this doesn't limit itself to 5xx/connection errors.
     """
@@ -140,7 +141,7 @@ def fetch_archive(
         if checkpoint_path and chunks:
             save_raw(pd.concat(chunks, ignore_index=True), checkpoint_path)
             print(
-                f"Failed after {chunk_num}/{total_chunks} chunks — saved partial result to {checkpoint_path}",
+                f"Failed after {chunk_num}/{total_chunks} chunks, saved partial result to {checkpoint_path}",
                 flush=True,
             )
         raise

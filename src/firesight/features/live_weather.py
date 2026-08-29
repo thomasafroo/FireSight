@@ -7,9 +7,9 @@ Source: Open-Meteo's historical-weather API (`archive-api.open-meteo.com`),
 not ERA5-Land via `cdsapi` directly. It serves the same underlying ECMWF
 ERA5/ERA5-Land reanalysis the training pipeline uses, but blends in a
 preliminary near-real-time product so today's values are already available
-(verified 2026-08-15 — same-day soil moisture came back non-null) rather
+(verified 2026-08-15, same-day soil moisture came back non-null) rather
 than plain ERA5-Land's ~5-day publication lag, and needs no CDS account or
-API key — see docs/07-serving.md#live-weather-for-predictlive.
+API key, see docs/07-serving.md#live-weather-for-predictlive.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 # Long enough to cover the widest rolling window (precip_30d, 30 days) plus
 # slack for add_days_since_rain to find a "last rain" day within a normal
 # fire-season dry spell without going NaN (see
-# engineering.py::add_days_since_rain — NaN there means "no rain in the
+# engineering.py::add_days_since_rain, NaN there means "no rain in the
 # lookback at all", which build_live_feature_row below treats as a hard
 # error rather than a fake number).
 LOOKBACK_DAYS = 45
@@ -57,7 +57,7 @@ def fetch_recent_weather(
     `add_wind_features` derives from ERA5's u10/v10 in the training
     pipeline). Relative humidity and wind speed are taken directly from
     Open-Meteo rather than derived from t2m/d2m or u10/v10 (see
-    engineering.py::add_relative_humidity/add_wind_features) — Open-Meteo
+    engineering.py::add_relative_humidity/add_wind_features), Open-Meteo
     reports both directly, and neither d2m nor u10/v10/wind direction is
     needed for anything else `FEATURE_COLUMNS` still uses after the
     dead-weight-feature cleanup (see
@@ -118,7 +118,7 @@ def build_live_feature_row(latitude: float, longitude: float, target_date: dt.da
     if missing:
         raise ValueError(
             f"Insufficient weather history to compute {missing} for {target_date} at "
-            f"({latitude}, {longitude}) — e.g. no recorded rain in the last {LOOKBACK_DAYS} days "
+            f"({latitude}, {longitude}), e.g. no recorded rain in the last {LOOKBACK_DAYS} days "
             "for days_since_rain, or too few days of history for a rolling window."
         )
     return row.to_dict()

@@ -19,7 +19,7 @@ def test_fetch_recent_detections_chunks_into_at_most_5_day_windows(monkeypatch):
 
     df = fetch_recent_detections("bbox", dt.date(2024, 7, 15), lookback_days=7)
 
-    # 7 days can't fit in one <=5-day request — chunked into a 5-day window then a 2-day window,
+    # 7 days can't fit in one <=5-day request, chunked into a 5-day window then a 2-day window,
     # covering [2024-07-09, 2024-07-15] with no gap or overlap.
     assert calls == [("2024-07-09", 5), ("2024-07-14", 2)]
     assert len(df) == 2

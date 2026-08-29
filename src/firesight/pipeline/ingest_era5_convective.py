@@ -2,21 +2,21 @@
 via the Copernicus CDS API.
 
 Distinct from `ingest_era5.py`'s ERA5-Land pull: this hits `reanalysis-era5-single-levels` for
-`cape` (convective available potential energy) and `cp` (convective precipitation) — a
+`cape` (convective available potential energy) and `cp` (convective precipitation), a
 storm/lightning-potential proxy, added per docs/06's winter-blind-spot follow-up (a real
 lightning-detection feed doesn't have long enough public history to cover this project's training
 years; see docs/04-weather-join.md for the full reasoning).
 
 Fetched at hourly (not 6-hourly) resolution, unlike ERA5-Land: verified directly against a real CDS
 response (not assumed) that `cp` here is NOT a running accumulation since 00 UTC the way ERA5-Land's
-`tp` is — each hourly sample is its own independent, already-deaccumulated value (see
+`tp` is, each hourly sample is its own independent, already-deaccumulated value (see
 features/convective.py), so 6-hourly sampling would silently capture only 1 of every 6 hours' rain.
 `cape` is fetched at the same hourly cadence so its daily max isn't undersampled either, at no extra
 request cost since it's the same call.
 
 Requesting an instantaneous variable (cape) and an accumulated one (cp) together also makes CDS
 return two separate NetCDF files inside one zip (split by GRIB stepType), unlike ERA5-Land's single
-combined-file response — this module merges them back into one file per month so callers see the
+combined-file response, this module merges them back into one file per month so callers see the
 same "one NetCDF per month" shape `ingest_era5.py` already produces.
 """
 
@@ -35,7 +35,7 @@ CONVECTIVE_VARIABLES = [
     "convective_precipitation",
 ]
 
-# north, west, south, east — matches the FIRMS/ERA5-Land bbox in ingest_firms.py/ingest_era5.py.
+# north, west, south, east, matches the FIRMS/ERA5-Land bbox in ingest_firms.py/ingest_era5.py.
 BC_KAMLOOPS_AREA = [51.5, -121.5, 49.8, -119.0]
 
 
@@ -110,7 +110,7 @@ def fetch_archive(
                     fetch_month(str(year), month, out_path, client)
                     print(f"[{label}] done -> {out_path}", flush=True)
                     break
-                except Exception as e:  # noqa: BLE001 — must keep going past any single month's failure
+                except Exception as e:  # noqa: BLE001, must keep going past any single month's failure
                     if attempt == max_attempts:
                         print(f"[{label}] FAILED after {max_attempts} attempts: {e}", flush=True)
                         failed.append(label)

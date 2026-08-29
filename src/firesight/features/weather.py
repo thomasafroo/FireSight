@@ -2,7 +2,7 @@
 
 ERA5-Land is delivered on its own ~9km (0.1 degree) lat/lon grid, coarser
 than the 5km fire-detection grid, so multiple grid cells share the same
-nearest ERA5 point — a simple planar nearest-neighbor is enough at this
+nearest ERA5 point, a simple planar nearest-neighbor is enough at this
 latitude and extent (a few hundred km across); it would need a haversine
 correction to hold up over a much larger area.
 """
@@ -23,7 +23,7 @@ def load_era5_daily(paths: list[Path]) -> pd.DataFrame:
     """Load monthly ERA5-Land files and aggregate to one row per (lat, lon, date).
 
     `tp` (total_precipitation) needs different handling than the
-    instantaneous variables below — see `_extract_daily_precip`'s docstring.
+    instantaneous variables below, see `_extract_daily_precip`'s docstring.
     Converted from metres to mm.
     """
     instant_frames = []
@@ -53,8 +53,8 @@ def _extract_daily_precip(tp_raw: pd.DataFrame) -> pd.DataFrame:
     accumulate from 00 UTC and run to the *end* of each day: the value
     stamped 06/12/18h is the cumulative total *since that day's 00 UTC*
     (not an independent 6h chunk), and the value stamped 00 UTC is the
-    *previous* day's complete 24h total (step=24 of the prior day's forecast)
-    — confirmed via ECMWF's Confluence documentation
+    *previous* day's complete 24h total (step=24 of the prior day's forecast),
+    confirmed via ECMWF's Confluence documentation
     (https://confluence.ecmwf.int/pages/viewpage.action?pageId=197702790).
     So a day D's true total is the sample timestamped D+1 at 00:00, and the
     06/12/18h samples are redundant partial-day subsets, not summed.

@@ -1,6 +1,6 @@
 """Evaluation metrics suited to a rare-event classification problem.
 
-Accuracy is close to meaningless here — a model predicting "no fire"
+Accuracy is close to meaningless here, a model predicting "no fire"
 everywhere scores ~99% while being useless. Use these instead.
 """
 
@@ -32,7 +32,7 @@ def top_k_capture(y_true: np.ndarray, y_score: np.ndarray, k_fraction: float = 0
 def brier_score(y_true: np.ndarray, y_score: np.ndarray) -> float:
     """Mean squared error between predicted probability and the {0,1} outcome.
 
-    Unlike pr_auc/roc_auc/top_k_capture (all rank-only — they only ask "are
+    Unlike pr_auc/roc_auc/top_k_capture (all rank-only, they only ask "are
     positives scored higher than negatives," and are invariant to any
     monotonic rescaling of y_score), this is the metric that actually checks
     whether a predicted probability means what it claims to mean. See

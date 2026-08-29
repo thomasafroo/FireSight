@@ -8,8 +8,8 @@ from firesight.features.convective import load_convective_daily
 def test_load_convective_daily_takes_daily_max_of_cape_and_sums_convective_precip(tmp_path):
     # 2 days x 4 hourly samples (a small subset of a real 24-sample day, enough to exercise the
     # max/sum aggregation without a huge fixture). cp values here are independent per-hour
-    # deaccumulated totals — verified against a real CDS response, not a running accumulation like
-    # ERA5-Land's tp (see ingest_era5_convective.py) — so summing them directly gives the daily
+    # deaccumulated totals, verified against a real CDS response, not a running accumulation like
+    # ERA5-Land's tp (see ingest_era5_convective.py), so summing them directly gives the daily
     # total, with no shift-and-diff trick needed.
     times = pd.to_datetime(
         [

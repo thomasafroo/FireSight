@@ -2,7 +2,7 @@
 
 A bare pickled model isn't enough to serve safely: predicting requires
 knowing the exact feature columns, in the exact order, the model was
-fit on — get that wrong and predict_proba fails loudly (wrong shape) or,
+fit on, get that wrong and predict_proba fails loudly (wrong shape) or,
 worse, silently returns nonsense (right shape, wrong column meaning).
 Bundling the feature list and basic provenance alongside the model
 avoids the API layer ever having to duplicate or guess that contract.
@@ -25,7 +25,7 @@ class ModelBundle:
     # Any object with a `.predict(np.ndarray) -> np.ndarray` interface (an `IsotonicRegression`
     # fit by `evaluation/calibration.py::fit_isotonic_calibrator`, in practice) that maps the raw
     # model's `predict_proba` output to a calibrated probability. `None` means this bundle was
-    # exported without one — callers should treat the calibrated value as unavailable, not as 0.
+    # exported without one, callers should treat the calibrated value as unavailable, not as 0.
     calibrator: Any | None = None
 
     def predict_proba(self, features: dict[str, float]) -> float:
@@ -36,7 +36,7 @@ class ModelBundle:
         return float(self.model.predict_proba(row)[0, 1])
 
     def predict_calibrated_proba(self, features: dict[str, float]) -> float | None:
-        """Calibrated counterpart to `predict_proba` — `None` if no calibrator is attached."""
+        """Calibrated counterpart to `predict_proba`, `None` if no calibrator is attached."""
         if self.calibrator is None:
             return None
         raw = self.predict_proba(features)

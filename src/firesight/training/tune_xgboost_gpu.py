@@ -1,17 +1,23 @@
 """GPU-accelerated XGBoost tuning, via tree_method="hist"/device="cuda".
 
-Same search (RANDOM_STATE, XGBOOST_DISTRIBUTIONS, N_ITER) as
-advanced_models.py's "XGBoost (randomized search)" run, just on the local
-NVIDIA GPU instead of CPU — kept as its own entry point rather than folded
-into advanced_models.py's __main__ since it needs different hardware (fails
-loudly if no CUDA-capable GPU is visible to XGBoost) and a different
-RandomizedSearchCV n_jobs (1, not -1 — see tune_random_search's docstring
-for why GPU candidates must run sequentially, not in parallel subprocesses).
+This is *the* XGBoost randomized search for this project, not a GPU copy of a
+CPU one: advanced_models.py's __main__ deliberately doesn't repeat it there
+(see the comment beside its RandomForest search), since it would be the same
+space, the same seed, and pure redundant work. It reuses that module's
+RANDOM_STATE/XGBOOST_DISTRIBUTIONS/N_ITER and its _run_random_search_and_report
+harness unchanged, so the estimator and the device are the only differences
+from the RandomForest search that does run there.
+
+Its own entry point rather than folded into advanced_models.py's __main__
+since it needs different hardware (fails loudly if no CUDA-capable GPU is
+visible to XGBoost) and a different RandomizedSearchCV n_jobs (1, not -1, see
+tune_random_search's docstring for why GPU candidates must run sequentially,
+not in parallel subprocesses).
 
 Requires the NVIDIA driver installed to support the CUDA version this
 xgboost build was compiled against (check via
 `python -c "import xgboost; print(xgboost.build_info())"` -> CUDA_VERSION).
-If the driver is too old, XGBoost does not error — it silently falls back to
+If the driver is too old, XGBoost does not error, it silently falls back to
 CPU with a "No visible GPU is found" warning, so a successful run here isn't
 by itself proof the GPU was actually used; check that warning is absent.
 """

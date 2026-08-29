@@ -1,11 +1,11 @@
 """Fuel type for one grid cell at request time, for `/predict/live` and `/predict/explain`.
 
 Unlike `features/live_weather.py`/`live_fire.py`, this is a cache lookup, not a live fetch: BC's
-Provincial Fuel Type Layer is static per-cell (`features/fuel_type.py`'s module docstring — it
+Provincial Fuel Type Layer is static per-cell (`features/fuel_type.py`'s module docstring, it
 doesn't change day to day, barring an actual burn), and `pipeline/build_dataset.py` already fetched
 and cached every cell in the training grid via `fuel_type.fetch_or_load_fuel_types`. `/predict/live`
 serves the same `BC_KAMLOOPS_BBOX` grid training used, so every `cell_id` it can be asked about is
-already a key in that cache — there's nothing to fetch live here that a WFS round-trip would add.
+already a key in that cache, there's nothing to fetch live here that a WFS round-trip would add.
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ def build_live_fuel_type_features(
     """One-hot `fuel_type_<code>` dict for `cell_id`, matching the served model's exact columns.
 
     A `cell_id` missing from the lookup, or whose code isn't among `fuel_type_columns` (e.g. a
-    genuinely unmapped cell — `fetch_fuel_type` already encodes that as `UNKNOWN_FUEL_TYPE`, which
+    genuinely unmapped cell, `fetch_fuel_type` already encodes that as `UNKNOWN_FUEL_TYPE`, which
     never became a training column since it never occurred in the Kamloops FC extract), falls back
-    to all-zero rather than raising — the same "a class that never occurs is just an always-zero
+    to all-zero rather than raising, the same "a class that never occurs is just an always-zero
     column" behavior `encode_fuel_type_features` already established for training.
     """
     code = lookup.get(cell_id)

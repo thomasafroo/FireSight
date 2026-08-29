@@ -10,11 +10,11 @@ This script checks whether that instability is the exception or the rule, by ref
 already-tuned hyperparameters (`BEST_RANDOM_FOREST_PARAMS`) on an expanding training window and
 scoring against each subsequent year in turn, instead of trusting the one arbitrary 2023/2024 split.
 
-Hyperparameters are deliberately NOT re-tuned per fold — that isolates "how much does the reported
+Hyperparameters are deliberately NOT re-tuned per fold, that isolates "how much does the reported
 number vary just by which year you happen to test on" from "how much would retuning per-fold change
 things," which is a different (and much more expensive) question this script isn't trying to answer.
-Re-running `RandomizedSearchCV` 8x would also revisit the `n_jobs=-1` hang risk noted in
-`advanced_models.py` for no benefit here.
+Re-running `RandomizedSearchCV` per fold would also multiply this script's cost by
+`advanced_models.py::N_ITER` (15 candidate fits per fold instead of 1) for no benefit here.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import pandas as pd
 from firesight.training.baseline import DATE_COLUMN, LABEL_COLUMN
 
 # 2012-2016 as a floor for the first fold's training window (5 years, avoids evaluating off a
-# single sparse year of history) — see docs/06 for why per-year fire counts vary so wildly (2017 and
+# single sparse year of history), see docs/06 for why per-year fire counts vary so wildly (2017 and
 # 2021 were BC's worst fire seasons on record; some years have as few as 30 fire-season positives).
 HOLDOUT_YEARS = list(range(2017, 2025))
 
@@ -37,7 +37,7 @@ def rolling_origin_folds(df: pd.DataFrame, holdout_years: list[int]) -> Iterator
     """Yield (year, train, holdout) for each holdout year, with an expanding training window.
 
     Unlike `temporal_split`'s single fixed boundary, this simulates "how would this model's reported
-    performance have looked if evaluated on each subsequent year in turn" — every fold's train set is
+    performance have looked if evaluated on each subsequent year in turn", every fold's train set is
     still strictly earlier than its holdout year (no leakage), it just isn't the one arbitrary
     train/val/test cut `export_model.py` happens to use.
     """
@@ -51,7 +51,7 @@ def monthly_capture_breakdown(dates: pd.Series, y_true: np.ndarray, y_score: np.
     """Break down top-k% capture by calendar month, instead of collapsing it into one number.
 
     Uses the exact same top-k cutoff `evaluation/metrics.py::top_k_capture` does (rank every row in
-    `dates`/`y_true`/`y_score` globally, take the top `k_fraction`) — this doesn't change what
+    `dates`/`y_true`/`y_score` globally, take the top `k_fraction`), this doesn't change what
     "captured" means, it just reports it per month so a single aggregate number can't hide which
     months are actually driving it. See docs/06-modeling-and-evaluation.md's "Investigating the
     val/test gap" section, which did this by hand for two years before this function generalized it
@@ -82,7 +82,7 @@ def monthly_capture_breakdown(dates: pd.Series, y_true: np.ndarray, y_score: np.
 @dataclass
 class BacktestFold:
     """One rolling-origin fold's raw predictions, kept around for reuse beyond this script's own
-    printing — e.g. `evaluation/calibration.py` pools `y_true`/`y_score` across every fold's
+    printing, e.g. `evaluation/calibration.py` pools `y_true`/`y_score` across every fold's
     `year` to fit and validate a calibrator, without re-running the (expensive) per-fold refit.
     """
 
@@ -98,7 +98,7 @@ def run_rolling_origin_backtest(
     df: pd.DataFrame, holdout_years: list[int] = HOLDOUT_YEARS
 ) -> list[BacktestFold]:
     """Refit `BEST_RANDOM_FOREST_PARAMS` per fold and score each holdout year, returning the raw
-    predictions rather than printing them — the reusable core this module's own `__main__` and
+    predictions rather than printing them, the reusable core this module's own `__main__` and
     `calibration.py`'s pooled-calibration check both build on.
     """
     from firesight.training.advanced_models import fit_random_forest

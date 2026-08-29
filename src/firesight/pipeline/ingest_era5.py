@@ -6,7 +6,7 @@ terms on its CDS page before your first request.
 
 Verified against https://forum.ecmwf.int (2026-08-11): the API param is
 `data_format`, not the older `format`; NetCDF requests can silently come
-back as a ZIP unless `download_format: unarchived` is also set — this
+back as a ZIP unless `download_format: unarchived` is also set, this
 script sets that but unzips as a fallback anyway.
 """
 
@@ -20,8 +20,10 @@ import cdsapi
 MONTHS = [f"{m:02d}" for m in range(1, 13)]
 
 # Variables relevant to fire risk: temperature, dewpoint, precipitation,
-# wind components, soil moisture. Trim this list once you know which
-# features actually matter for the model.
+# wind components, soil moisture. Deliberately kept wider than
+# baseline.py::FEATURE_COLUMNS, which dropped d2m/u10/v10 on 2026-08-15:
+# engineering.py's add_relative_humidity/add_wind_features still derive
+# relative_humidity and wind_speed from them, so they stay in the raw pull.
 ERA5_LAND_VARIABLES = [
     "2m_temperature",
     "2m_dewpoint_temperature",
@@ -31,14 +33,14 @@ ERA5_LAND_VARIABLES = [
     "volumetric_soil_water_layer_1",
 ]
 
-# north, west, south, east — matches the FIRMS bbox in ingest_firms.py
+# north, west, south, east, matches the FIRMS bbox in ingest_firms.py
 BC_KAMLOOPS_AREA = [51.5, -121.5, 49.8, -119.0]
 
 
 def fetch_month(year: str, month: str, out_path: Path, client: cdsapi.Client | None = None) -> Path:
     """Fetch one month of ERA5-Land variables for the Kamloops bbox.
 
-    CDS requests are synchronous and queued server-side — a single month
+    CDS requests are synchronous and queued server-side, a single month
     can take anywhere from under a minute to several minutes depending on
     load, unlike the near-instant FIRMS requests.
     """
@@ -79,7 +81,7 @@ def fetch_archive(
 ) -> list[str]:
     """Fetch every month in [start_year, end_year] into one file per month.
 
-    Each month is its own file, so this is naturally resumable — already
+    Each month is its own file, so this is naturally resumable, already
     downloaded months are skipped rather than re-fetched. Returns the list
     of "{year}-{month}" strings that failed after retries, if any; the run
     keeps going past a failed month rather than aborting the whole backfill.
@@ -100,7 +102,7 @@ def fetch_archive(
                     fetch_month(str(year), month, out_path, client)
                     print(f"[{label}] done -> {out_path}", flush=True)
                     break
-                except Exception as e:  # noqa: BLE001 — must keep going past any single month's failure
+                except Exception as e:  # noqa: BLE001, must keep going past any single month's failure
                     if attempt == max_attempts:
                         print(f"[{label}] FAILED after {max_attempts} attempts: {e}", flush=True)
                         failed.append(label)
