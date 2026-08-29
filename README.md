@@ -41,7 +41,8 @@ historical wildfires.
   labeled grid of 5km cells across the Kamloops Fire Centre, split by date (not randomly) into
   training, validation, and test sets.
 - **Modeling:** compared a dummy baseline, logistic regression, random forest, XGBoost, and a neural
-  network; a tuned random forest performs best and is the model currently served.
+  network; a tuned random forest performs best and is the model currently served. See [Current
+  model](docs/06-modeling-and-evaluation.md#current-model) for what it is and what it scores.
 - **Serving:** a FastAPI backend that scores risk for any cell and date, including live conditions
   fetched in real time rather than only replaying history.
 - **Frontend:** a Leaflet map for browsing historical risk against what actually happened, and

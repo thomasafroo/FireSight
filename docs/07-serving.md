@@ -23,9 +23,10 @@ there's no second place that list could drift out of sync.
 becomes `data/processed/model.joblib`, deliberately a separate, explicit step from `baseline.py` or
 `advanced_models.py` (which explore/compare candidates), so promoting a model to "the one being
 served" is a decision made after looking at results, not an automatic side effect of running a
-training script. Currently exports the tuned `RandomForest` model (`BEST_RANDOM_FOREST_PARAMS`, see
-[Modeling & evaluation](06-modeling-and-evaluation.md#widening-the-search-randomizedsearchcv--predefinedsplit)
-for the wider-search results that put it ahead of XGBoost on every test-set metric).
+training script. Currently exports the tuned `RandomForest` model (`BEST_RANDOM_FOREST_PARAMS`) on
+the 32-column `FEATURE_COLUMNS`, see [Modeling &
+evaluation](06-modeling-and-evaluation.md#current-model) for exactly what that bundle holds, what it
+scores, and the promotion history that got it there.
 
 This started out exporting the `LogisticRegression` baseline, then got swapped to XGBoost once the
 first RandomForest/XGBoost grid-search tuning finished, then swapped again to RandomForest once a

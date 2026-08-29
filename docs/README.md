@@ -24,8 +24,10 @@ feature.
 5. [Feature engineering](05-feature-engineering.md), turning raw daily weather into the
 lag/rolling/trend features a model can actually use.
 6. [Modeling & evaluation](06-modeling-and-evaluation.md), temporal train/val/test splitting, the
-baseline-first methodology, the metrics used instead of accuracy, and real results comparing
-Dummy/LogisticRegression/RandomForest/XGBoost.
+baseline-first methodology, the metrics used instead of accuracy, and the measured results behind
+every model and feature-set decision. Starts with [Current
+model](06-modeling-and-evaluation.md#current-model), what is served today and what it scores; the
+rest of the page is the dated history that got there.
 7. [Serving](07-serving.md), persisting a model safely, the FastAPI inference/demo endpoints, and
 the minimal frontend risk map.
 8. [Future directions & open questions](08-future-directions.md), what's genuinely still open
